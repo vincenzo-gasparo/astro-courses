@@ -1,17 +1,17 @@
 import { test, expect } from '@playwright/test'
 
-// NAV-01: home page lists all 15 day cards
+// NAV-01: home page lists all 16 lessons (day-00 intro + 15 main lessons)
 test('home page lists 15 day cards with titles', async ({ page }) => {
   await page.goto('/')
   const cards = page.locator('[data-testid="day-card"]')
-  await expect(cards).toHaveCount(15)
+  await expect(cards).toHaveCount(16)
 })
 
-// NAV-02: clicking a day card navigates to lesson page
+// NAV-02: clicking a day card navigates to lesson page (day-00 is the intro, first card)
 test('lesson navigation — clicking day 1 opens lesson page', async ({ page }) => {
   await page.goto('/')
   await page.locator('[data-testid="day-card"]').first().click()
-  await expect(page).toHaveURL(/\/lessons\/day-01/)
+  await expect(page).toHaveURL(/\/lessons\/day-0[01]/)
 })
 
 // NAV-03: prev/next navigation links exist on lesson page

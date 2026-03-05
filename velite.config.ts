@@ -24,6 +24,13 @@ const attachRaw = () => (tree: any) => {
   })
 }
 
+const quizItem = s.object({
+  question: s.string(),
+  options: s.array(s.string()),
+  correct: s.number(),
+  explanation: s.string(),
+})
+
 export default defineConfig({
   root: 'content',
   output: {
@@ -44,6 +51,7 @@ export default defineConfig({
         description: s.string().optional(),
         slug: s.path(),   // yields "lessons/day-01" etc.
         body: s.mdx(),
+        quiz: s.array(quizItem).optional(),
       }),
     },
   },

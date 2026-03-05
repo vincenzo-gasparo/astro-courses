@@ -1,0 +1,12 @@
+.planning/
+# Next.js
+.next/
+out/
+node_modules/
+# Env files
+.env*
+!.env.example
+# OS
+.DS_Store
+# Editor
+.vscode/

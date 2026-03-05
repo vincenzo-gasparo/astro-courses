@@ -1,32 +1,292 @@
 ---
-title: "Applicative: Combining Independent Effects"
+title: "NonEmptyArray: Compile-Time Guarantee of Non-Emptiness"
 day: 8
-description: "Use Applicative to combine multiple independent effectful computations — validating multiple fields simultaneously, fetching in parallel."
+description: "NonEmptyArray<A> is [A, ...A[]] — a tuple type that guarantees at least one element exists. This eliminates an entire class of runtime errors by making the impossible case unrepresentable."
+quiz:
+  - question: "What type does NEA.fromArray return, and why?"
+    options:
+      - "NonEmptyArray<A> — it always succeeds because fromArray validates the array"
+      - "Option<NonEmptyArray<A>> — because the input array might be empty, making the conversion fallible"
+      - "Either<string, NonEmptyArray<A>> — it returns Left with an error message for empty arrays"
+    correct: 1
+    explanation: "NEA.fromArray returns O.Option<NEA.NonEmptyArray<A>> because a regular array might be empty. If the array has at least one element, you get O.some(nonEmptyArray). If it is empty, you get O.none. This is the correct way to convert from the regular array world to the non-empty guarantee world."
+  - question: "What is the type of NonEmptyArray<string> in TypeScript?"
+    options:
+      - "Array<string> with a NonEmpty brand type"
+      - "[string, ...string[]] — a tuple with at least one string"
+      - "{ head: string; tail: string[] }"
+    correct: 1
+    explanation: "NonEmptyArray<A> is defined as [A, ...A[]] — a tuple type where the first element is required and the rest is a spread of zero or more additional elements. This is a native TypeScript tuple type, not a wrapper or brand — it works everywhere a regular array does."
+  - question: "When is it appropriate to use a regular ReadonlyArray instead of NonEmptyArray?"
+    options:
+      - "Never — you should always use NonEmptyArray for better type safety"
+      - "When the array could legitimately be empty and you need to represent that possibility"
+      - "When performance matters, because NonEmptyArray has higher overhead"
+    correct: 1
+    explanation: "NonEmptyArray is the right choice only when an empty array is a genuinely impossible or invalid state for your domain. If an event log could legitimately have zero entries, use ReadonlyArray. Adding NonEmptyArray where the empty case is valid just forces callers to do unnecessary conversions."
 ---
 
-## Independent vs Sequential Effects
+## Introduction
 
-Applicative (`ap`) lets you combine effects that do not depend on each other. This is different from Monad (`chain`), which is for sequential effects where each step depends on the previous.
+Every TypeScript developer has written this bug at least once:
 
-## Parallel validation with Applicative
+```typescript
+const items = getItems()
+const first = items[0]  // could be undefined if items is empty!
+first.process()         // TypeError: Cannot read properties of undefined
+```
+
+The fix is always the same: add a length check. But length checks are easy to forget, easy to miss in code review, and impossible for the type system to enforce — `items[0]` has type `Item`, not `Item | undefined`, even on a regular array, unless you enable `noUncheckedIndexedAccess` in tsconfig.
+
+`NonEmptyArray<A>` solves this at the type level. It is defined as `[A, ...A[]]` — a tuple with a required first element followed by zero or more additional elements. Functions that return `NonEmptyArray<A>` guarantee the caller that the result is never empty. Functions that accept `NonEmptyArray<A>` communicate that they require at least one element and will not work correctly with an empty input.
+
+This is "making illegal states unrepresentable" — a core principle of type-driven design. Instead of documenting "this function throws if the array is empty" in a JSDoc comment, you express that constraint in the type, and the TypeScript compiler enforces it.
+
+The `NEA.head` function is the canonical example: on a `NonEmptyArray<A>`, `NEA.head(nea)` returns `A` (never `A | undefined`). There is no null check needed because the type guarantees the element exists. The type system has eliminated the entire class of "empty array access" bugs.
+
+## Core API
+
+### Creating NonEmptyArrays
+
+```typescript
+import * as NEA from 'fp-ts/NonEmptyArray'
+import * as O from 'fp-ts/Option'
+
+// NEA.of — create a single-element NonEmptyArray
+const single: NEA.NonEmptyArray<string> = NEA.of('hello')
+// ['hello'] — type is [string, ...string[]]
+
+// NEA.fromArray — convert a regular array, returns Option
+const fromEmpty = NEA.fromArray([])           // O.none
+const fromValues = NEA.fromArray([1, 2, 3])   // O.some([1, 2, 3])
+// Type of O.some value: NonEmptyArray<number>
+
+// Inline construction (TypeScript infers the tuple type)
+const inline: NEA.NonEmptyArray<number> = [1, 2, 3]
+
+// Common pattern: fromArray + O.map
+import { pipe } from 'fp-ts/function'
+
+const safeHead = (arr: number[]): O.Option<number> =>
+  pipe(
+    arr,
+    NEA.fromArray,
+    O.map(NEA.head)
+  )
+
+safeHead([10, 20, 30])   // O.some(10)
+safeHead([])             // O.none — no runtime error!
+```
+
+### head, tail, last — safe access without undefined
+
+```typescript
+import * as NEA from 'fp-ts/NonEmptyArray'
+
+const nea: NEA.NonEmptyArray<string> = ['alpha', 'beta', 'gamma']
+
+// NEA.head — first element, guaranteed to exist, type is A (not A | undefined)
+const first: string = NEA.head(nea)   // 'alpha'
+
+// NEA.tail — all elements after the first, may be empty (regular array)
+const rest: string[] = NEA.tail(nea)   // ['beta', 'gamma']
+
+// NEA.last — last element, guaranteed to exist
+const last: string = NEA.last(nea)   // 'gamma'
+
+// NEA.init — all elements except the last
+const init: string[] = NEA.init(nea)   // ['alpha', 'beta']
+```
+
+### map, reduce — transforming NonEmptyArrays
 
 ```typescript
 import { pipe } from 'fp-ts/function'
-import * as E from 'fp-ts/Either'
-import { sequenceS } from 'fp-ts/Apply'
+import * as NEA from 'fp-ts/NonEmptyArray'
 
-const validateName = (s: string): E.Either<string, string> =>
-  s.length > 0 ? E.right(s) : E.left('Name is required')
+const scores: NEA.NonEmptyArray<number> = [85, 92, 78, 95, 88]
 
-const validateAge = (n: number): E.Either<string, number> =>
-  n >= 0 && n < 150 ? E.right(n) : E.left('Invalid age')
+// NEA.map — transform each element; result is still NonEmptyArray
+const letterGrades: NEA.NonEmptyArray<string> = pipe(
+  scores,
+  NEA.map((score) =>
+    score >= 90 ? 'A' :
+    score >= 80 ? 'B' :
+    score >= 70 ? 'C' : 'D'
+  )
+)
+// ['B', 'A', 'C', 'A', 'B']
 
-const result = sequenceS(E.Applicative)({
-  name: validateName('Alice'),
-  age: validateAge(30),
-})
-
-console.log(result) // E.right({ name: 'Alice', age: 30 })
+// NEA.reduce — accumulate; same as A.reduce
+const total = pipe(scores, NEA.reduce(0, (acc, n) => acc + n))
+// 438
 ```
 
-`sequenceS` combines multiple Either values into a single Either of an object — collecting all errors.
+### min, max — requiring at least one element
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as NEA from 'fp-ts/NonEmptyArray'
+import * as Ord from 'fp-ts/Ord'
+import * as N from 'fp-ts/number'
+
+const values: NEA.NonEmptyArray<number> = [42, 7, 99, 13, 55]
+
+// NEA.min and NEA.max require an Ord instance and a NonEmptyArray
+// They are safe because at least one element is guaranteed
+const minimum: number = NEA.min(N.Ord)(values)   // 7
+const maximum: number = NEA.max(N.Ord)(values)   // 99
+
+// Contrast with regular array: there's no safe min/max on Array<number>
+// because Math.min([]) === Infinity (surprising!)
+// With NEA, the type guarantees a sensible result
+
+// Custom Ord for objects
+interface Product { name: string; price: number }
+const byPrice = Ord.contramap((p: Product) => p.price)(N.Ord)
+
+const products: NEA.NonEmptyArray<Product> = [
+  { name: 'Widget', price: 9.99 },
+  { name: 'Gadget', price: 24.99 },
+  { name: 'Doohickey', price: 4.99 },
+]
+
+const cheapest: Product = NEA.min(byPrice)(products)
+// { name: 'Doohickey', price: 4.99 }
+```
+
+### groupBy — group elements preserving non-emptiness
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as NEA from 'fp-ts/NonEmptyArray'
+
+interface Order {
+  id: string
+  status: 'pending' | 'shipped' | 'delivered'
+  total: number
+}
+
+const orders: NEA.NonEmptyArray<Order> = [
+  { id: 'o1', status: 'pending', total: 50 },
+  { id: 'o2', status: 'shipped', total: 120 },
+  { id: 'o3', status: 'pending', total: 30 },
+  { id: 'o4', status: 'delivered', total: 80 },
+]
+
+// NEA.groupBy groups elements by key — each group is a NonEmptyArray
+const grouped = pipe(
+  orders,
+  NEA.groupBy((o) => o.status)
+)
+// {
+//   pending:   [{ id: 'o1', ... }, { id: 'o3', ... }] — NonEmptyArray<Order>
+//   shipped:   [{ id: 'o2', ... }]                    — NonEmptyArray<Order>
+//   delivered: [{ id: 'o4', ... }]                    — NonEmptyArray<Order>
+// }
+// Each group is guaranteed non-empty by groupBy's design
+```
+
+## When to Use / When NOT to Use
+
+### Use NonEmptyArray when:
+
+- Your domain invariant requires at least one element — a report must have at least one data point, a team must have at least one member, a tournament must have at least two participants
+- You are writing a function that requires input to be non-empty (e.g., finding the minimum, computing an average, selecting a random element)
+- You want to return a guarantee that callers can rely on — `processResults: (events: RawEvent[]) => NonEmptyArray<ProcessedEvent>` communicates "this always produces at least one result"
+- You need `NEA.min` / `NEA.max` — these require a non-empty array to be well-defined
+
+### Do NOT use NonEmptyArray when:
+
+**The empty case is valid.** If an event log could genuinely have zero events, using `NonEmptyArray` forces callers to pretend otherwise. The type should reflect the actual domain — if empty is possible, use `ReadonlyArray`.
+
+**You only need it once as a runtime check.** If you are checking `arr.length > 0` in one place and immediately using `arr[0]`, you do not need NonEmptyArray. It adds the most value at function boundaries where the constraint needs to be communicated to callers.
+
+**You are converting unnecessarily.** The pattern of `pipe(arr, NEA.fromArray, O.map(doSomething))` is great when it replaces an unsafe access. If you find yourself writing `NEA.fromArray` and then immediately calling `O.getOrElse(() => [])` to get back to a regular array, you have added complexity for no benefit.
+
+## Real-World Example
+
+Computing statistics on a list of user events, where at least one event is required to calculate meaningful results.
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as NEA from 'fp-ts/NonEmptyArray'
+import * as O from 'fp-ts/Option'
+import * as A from 'fp-ts/ReadonlyArray'
+import * as Ord from 'fp-ts/Ord'
+import * as N from 'fp-ts/number'
+
+interface UserEvent {
+  userId: string
+  action: 'login' | 'purchase' | 'view' | 'logout'
+  timestamp: number
+  durationMs?: number
+}
+
+interface SessionStats {
+  userId: string
+  eventCount: number
+  firstEvent: UserEvent
+  lastEvent: UserEvent
+  totalDurationMs: number
+  avgDurationMs: number
+}
+
+const byTimestamp = Ord.contramap((e: UserEvent) => e.timestamp)(N.Ord)
+
+// This function REQUIRES at least one event — encoded in the type
+const computeSessionStats = (events: NEA.NonEmptyArray<UserEvent>): SessionStats => {
+  const sorted = pipe(events, NEA.sort(byTimestamp))
+  const durations = pipe(
+    events,
+    A.filterMap((e) => O.fromNullable(e.durationMs))
+  )
+  const totalDuration = pipe(durations, A.reduce(0, (acc, n) => acc + n))
+
+  return {
+    userId: NEA.head(events).userId,    // safe — type guarantees first element
+    eventCount: events.length,
+    firstEvent: NEA.head(sorted),       // safe — earliest event
+    lastEvent: NEA.last(sorted),        // safe — latest event
+    totalDurationMs: totalDuration,
+    avgDurationMs: durations.length > 0 ? totalDuration / durations.length : 0,
+  }
+}
+
+// At the boundary: convert from regular array safely
+const analyzeUserSession = (
+  userId: string,
+  rawEvents: UserEvent[]
+): O.Option<SessionStats> =>
+  pipe(
+    rawEvents,
+    A.filter((e) => e.userId === userId),       // filter to this user's events
+    NEA.fromArray,                              // O.Option<NonEmptyArray<UserEvent>>
+    O.map(computeSessionStats)                 // only compute if we have events
+  )
+
+// Usage
+const events: UserEvent[] = [
+  { userId: 'u1', action: 'login', timestamp: 1000, durationMs: 50 },
+  { userId: 'u1', action: 'view', timestamp: 1200, durationMs: 3000 },
+  { userId: 'u2', action: 'login', timestamp: 1100 },
+  { userId: 'u1', action: 'purchase', timestamp: 2000, durationMs: 500 },
+  { userId: 'u1', action: 'logout', timestamp: 2500 },
+]
+
+const statsForU1 = analyzeUserSession('u1', events)
+// O.some({ userId: 'u1', eventCount: 4, firstEvent: ..., lastEvent: ..., totalDurationMs: 3550, avgDurationMs: 1183 })
+
+const statsForU3 = analyzeUserSession('u3', events)
+// O.none — no events for this user, no stats to compute
+```
+
+The key design insight: `computeSessionStats` takes a `NonEmptyArray` because computing stats on zero events is nonsensical. The function does not need to handle the empty case — that is the caller's responsibility. `analyzeUserSession` handles the empty case by returning `O.none`, before calling `computeSessionStats`. The types enforce this separation of concerns.
+
+## Key Takeaways
+
+- **`NonEmptyArray<A>` is `[A, ...A[]]`** — a native TypeScript tuple type that guarantees at least one element; no runtime overhead, just a type constraint
+- **`NEA.fromArray`** converts `A[]` to `O.Option<NonEmptyArray<A>>` — the Option captures the possibility of an empty input; use it at the boundary between the regular-array world and the non-empty-guarantee world
+- **`NEA.head`** and **`NEA.last`** return `A` (not `A | undefined`) — the compile-time guarantee eliminates null checks for the first/last element
+- **`NEA.min` and `NEA.max`** require a NonEmptyArray because minimum and maximum are undefined for empty sets — the type system enforces this mathematical fact
+- **Use NonEmptyArray at function boundaries** — it communicates constraints to callers and makes invalid states (empty input to a function that requires data) impossible to pass in without a compiler error

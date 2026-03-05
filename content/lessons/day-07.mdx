@@ -1,31 +1,298 @@
 ---
-title: "Functor: Mapping Over Containers"
+title: "ReadonlyArray: Functional Array Processing"
 day: 7
-description: "Understand the Functor type class that powers .map() across Option, Either, Task, and arrays — the foundation of functional data transformation."
+description: "fp-ts's ReadonlyArray module provides a comprehensive set of array operations designed for pipe chains — replacing imperative loops with composable, type-safe transformations."
+quiz:
+  - question: "Why does fp-ts use ReadonlyArray instead of the built-in mutable array type?"
+    options:
+      - "ReadonlyArray is faster because it uses a different internal data structure"
+      - "ReadonlyArray prevents accidental mutation, making functions referentially transparent"
+      - "ReadonlyArray is required by the Velite schema for lesson content"
+    correct: 1
+    explanation: "ReadonlyArray<A> is the type of an immutable array — you cannot call push, splice, or sort on it. This prevents mutation bugs where a function unexpectedly modifies an array that was passed to it. fp-ts array functions return new ReadonlyArrays rather than mutating in place, making them safe to use in any context."
+  - question: "What does A.chain (also called A.flatMap) do?"
+    options:
+      - "Chains two arrays together by concatenating them"
+      - "Maps each element to an array and flattens the results into a single array"
+      - "Applies a chain of filters to reduce the array"
+    correct: 1
+    explanation: "A.chain(f) maps each element of the array through f (which returns an array), then flattens all the resulting arrays into one. It is the same as Array.prototype.flatMap. Example: pipe([1,2,3], A.chain(n => [n, n*10])) gives [1,10,2,20,3,30]."
+  - question: "What is the difference between A.filter and A.filterMap?"
+    options:
+      - "A.filter returns a boolean; A.filterMap returns an Option"
+      - "A.filter keeps or discards elements based on a predicate; A.filterMap maps elements to Option and keeps only the Some values"
+      - "A.filterMap is the fp-ts v2 name for A.filter"
+    correct: 1
+    explanation: "A.filter(predicate) retains elements where predicate returns true. A.filterMap(f) maps each element through f (which returns Option<B>) and collects only the Some<B> values — filtering and transforming in one pass. This eliminates the common pattern of .filter().map() where map might return undefined."
 ---
 
-## What is a Functor?
+## Introduction
 
-A Functor is a type class with a single operation: `map`. It lets you apply a function to a value inside a container without unwrapping it. Option, Either, Task, and Array are all Functors.
+JavaScript's built-in array methods — `map`, `filter`, `reduce`, `find` — are genuinely good. They are expressive, they are familiar, and for simple cases they are the right tool. So why does fp-ts provide an entire `ReadonlyArray` module with what looks like duplicate functionality?
 
-## Functor laws and usage
+The answer is threefold. First, `pipe` compatibility. Native array methods use the object-method style: `arr.map(f).filter(g).reduce(h, init)`. This works, but it breaks down when your transformations involve fp-ts types — you cannot naturally compose a native `.map()` with `O.map()` in the same chain. fp-ts array functions are standalone functions with data last, making them first-class `pipe` steps: `pipe(arr, A.map(f), A.filter(g), A.reduce(init, h))`.
+
+Second, immutability. fp-ts array functions return `ReadonlyArray<A>`, not mutable `A[]`. This is not just a TypeScript type difference — it is a guarantee. When you pass an array to an fp-ts function, you know it will not be mutated. No defensive copying, no surprise mutations from library code.
+
+Third, additional utilities. fp-ts's `ReadonlyArray` module includes operations not available on the native prototype: `findFirst` (returns an `Option`), `uniq` (deduplication with custom equality), `sort` with `Ord` instances, `partition` (split into matching and non-matching), `filterMap` (map and filter in one pass), `groupBy`, and more.
+
+These extras are especially valuable in data pipelines where you are processing collections from APIs or databases.
+
+## Core API
+
+### map, filter, reduce — familiar operations, fp-ts style
 
 ```typescript
 import { pipe } from 'fp-ts/function'
-import * as O from 'fp-ts/Option'
-import * as E from 'fp-ts/Either'
+import * as A from 'fp-ts/ReadonlyArray'
 
-const double = (n: number) => n * 2
+const numbers = [1, 2, 3, 4, 5] as const
 
-// Same map interface across all Functors
-const optionResult = pipe(O.some(5), O.map(double))
-// O.some(10)
+// A.map — transform each element
+const doubled = pipe(numbers, A.map((n) => n * 2))
+// [2, 4, 6, 8, 10]
 
-const eitherResult = pipe(E.right(5), E.map(double))
-// E.right(10)
+// A.filter — keep elements matching a predicate
+const evens = pipe(numbers, A.filter((n) => n % 2 === 0))
+// [2, 4]
 
-const arrayResult = [1, 2, 3].map(double)
-// [2, 4, 6]
+// A.reduce — accumulate a result
+const sum = pipe(numbers, A.reduce(0, (acc, n) => acc + n))
+// 15
+
+// Compose them in a pipe — same readability as method chaining
+const result = pipe(
+  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+  A.filter((n) => n % 2 === 0),          // [2, 4, 6, 8, 10]
+  A.map((n) => n * n),                   // [4, 16, 36, 64, 100]
+  A.reduce(0, (acc, n) => acc + n)       // 220
+)
 ```
 
-The Functor abstraction means you can write generic code that works with any mappable container.
+### chain (flatMap) — map then flatten
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as A from 'fp-ts/ReadonlyArray'
+
+// A.chain maps each element to an array and flattens one level
+const expanded = pipe(
+  ['hello', 'world'],
+  A.chain((word) => word.split(''))   // flatten each string's characters
+)
+// ['h', 'e', 'l', 'l', 'o', 'w', 'o', 'r', 'l', 'd']
+
+// Useful for expanding each item into multiple items
+const pairs = pipe(
+  [1, 2, 3],
+  A.chain((n) => [n, n * 10])   // expand each number into [n, n*10]
+)
+// [1, 10, 2, 20, 3, 30]
+```
+
+### filterMap — map and filter in one pass
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as A from 'fp-ts/ReadonlyArray'
+import * as O from 'fp-ts/Option'
+
+// A.filterMap applies f to each element, keeps only Some values
+const parsePositive = (s: string): O.Option<number> => {
+  const n = parseInt(s, 10)
+  return isNaN(n) || n <= 0 ? O.none : O.some(n)
+}
+
+const numbers = pipe(
+  ['3', 'abc', '0', '-1', '42', 'hello'],
+  A.filterMap(parsePositive)
+)
+// [3, 42]
+// No intermediate array, no undefined values to worry about
+```
+
+### findFirst, partition, uniq
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as A from 'fp-ts/ReadonlyArray'
+import * as O from 'fp-ts/Option'
+
+const users = [
+  { id: 1, name: 'Alice', role: 'admin' },
+  { id: 2, name: 'Bob', role: 'member' },
+  { id: 3, name: 'Carol', role: 'admin' },
+]
+
+// A.findFirst — returns Option<A> instead of A | undefined
+const firstAdmin = pipe(
+  users,
+  A.findFirst((u) => u.role === 'admin')
+)
+// O.some({ id: 1, name: 'Alice', role: 'admin' })
+// Never returns undefined — safe to chain with O.map
+
+// A.partition — split into matching and non-matching
+const { left: members, right: admins } = pipe(
+  users,
+  A.partition((u) => u.role === 'admin')
+)
+// admins: [{ id: 1, name: 'Alice', ... }, { id: 3, name: 'Carol', ... }]
+// members: [{ id: 2, name: 'Bob', ... }]
+
+// A.uniq — deduplicate with a custom equality function
+import { Eq } from 'fp-ts/Eq'
+import * as S from 'fp-ts/string'
+
+const tags = ['typescript', 'fp-ts', 'TypeScript', 'fp-ts', 'functional']
+const uniqueTags = pipe(
+  tags,
+  A.map((t) => t.toLowerCase()),
+  A.uniq(S.Eq)   // use string equality
+)
+// ['typescript', 'fp-ts', 'functional']
+```
+
+### sort — sorting with Ord instances
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as A from 'fp-ts/ReadonlyArray'
+import * as Ord from 'fp-ts/Ord'
+import * as N from 'fp-ts/number'
+import * as S from 'fp-ts/string'
+
+const words = ['banana', 'apple', 'cherry', 'date']
+
+// Sort strings alphabetically
+const sorted = pipe(words, A.sort(S.Ord))
+// ['apple', 'banana', 'cherry', 'date']
+
+// Sort objects by a field using Ord.contramap
+const users = [
+  { name: 'Charlie', age: 35 },
+  { name: 'Alice', age: 28 },
+  { name: 'Bob', age: 42 },
+]
+
+const byAge = Ord.contramap((u: typeof users[0]) => u.age)(N.Ord)
+const sortedByAge = pipe(users, A.sort(byAge))
+// [{ name: 'Alice', age: 28 }, { name: 'Charlie', age: 35 }, { name: 'Bob', age: 42 }]
+```
+
+### flatten — reducing nested arrays
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as A from 'fp-ts/ReadonlyArray'
+
+const nested = [[1, 2], [3, 4], [5]]
+const flat = pipe(nested, A.flatten)
+// [1, 2, 3, 4, 5]
+```
+
+## When to Use / When NOT to Use
+
+### Use ReadonlyArray (fp-ts) when:
+
+- You are building a `pipe` chain that combines array operations with fp-ts types (Option, Either, etc.)
+- You need `filterMap`, `findFirst` (which returns `Option`), `partition`, or other utilities not on the native prototype
+- Immutability matters — you are passing arrays to functions that must not mutate them
+- You are sorting or deduplicating with custom equality/ordering logic using `Ord`/`Eq` instances
+
+### Do NOT use ReadonlyArray when:
+
+**Performance is critical and mutation is acceptable.** fp-ts array functions create new arrays at each step. For large arrays with many transformations, this can cause significant garbage collection pressure. In hot paths, a single imperative loop over a mutable array is often 10-50x faster. Profile before assuming fp-ts array style is a bottleneck — but be aware the trade-off exists.
+
+**Simple one-off transformations.** If you are just doing `users.map(u => u.name)` in an isolated helper with no composition needed, native method syntax is perfectly readable. Do not add `pipe` overhead for the sake of consistency.
+
+**You are working with native arrays from third-party libraries.** Many libraries return and expect mutable `A[]`. You can use fp-ts functions on them (JavaScript ignores the readonly annotation at runtime), but constantly casting between `A[]` and `ReadonlyArray<A>` becomes tedious. Consider wrapping at the boundary instead.
+
+## Real-World Example
+
+Processing a list of API responses — filtering out errors, transforming valid entries, deduplicating by ID, and sorting by timestamp.
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as A from 'fp-ts/ReadonlyArray'
+import * as O from 'fp-ts/Option'
+import * as Ord from 'fp-ts/Ord'
+import * as N from 'fp-ts/number'
+
+interface ApiEvent {
+  id: string
+  type: string
+  timestamp: number
+  payload?: Record<string, unknown>
+  error?: string
+}
+
+interface ProcessedEvent {
+  id: string
+  type: string
+  timestamp: number
+  data: Record<string, unknown>
+}
+
+// Predicate to check if an event is valid (not an error event)
+const isValidEvent = (e: ApiEvent): boolean =>
+  e.error === undefined && e.payload !== undefined
+
+// Transform a valid ApiEvent into ProcessedEvent
+const toProcessedEvent = (e: ApiEvent): O.Option<ProcessedEvent> =>
+  isValidEvent(e)
+    ? O.some({
+        id: e.id,
+        type: e.type,
+        timestamp: e.timestamp,
+        data: e.payload!,
+      })
+    : O.none
+
+// Ord instance for sorting events by timestamp (most recent first)
+const byTimestampDesc: Ord.Ord<ProcessedEvent> = {
+  equals: (a, b) => a.timestamp === b.timestamp,
+  compare: (a, b) => N.Ord.compare(b.timestamp, a.timestamp),  // reversed for descending
+}
+
+// Eq instance for deduplication by ID
+import { Eq } from 'fp-ts/Eq'
+const byId: Eq<ProcessedEvent> = {
+  equals: (a, b) => a.id === b.id,
+}
+
+const processEvents = (
+  rawEvents: ReadonlyArray<ApiEvent>
+): ReadonlyArray<ProcessedEvent> =>
+  pipe(
+    rawEvents,
+    A.filterMap(toProcessedEvent),    // filter errors, transform valid events
+    A.uniq(byId),                     // deduplicate by ID (API may send duplicates)
+    A.sort(byTimestampDesc),          // sort most recent first
+  )
+
+// Usage
+const apiResponse: ApiEvent[] = [
+  { id: 'evt-1', type: 'click', timestamp: 1000, payload: { button: 'submit' } },
+  { id: 'evt-2', type: 'error', timestamp: 1001, error: 'Network timeout' },
+  { id: 'evt-3', type: 'view', timestamp: 999, payload: { page: '/home' } },
+  { id: 'evt-1', type: 'click', timestamp: 1000, payload: { button: 'submit' } },  // duplicate
+]
+
+const events = processEvents(apiResponse)
+// [
+//   { id: 'evt-1', type: 'click', timestamp: 1000, data: { button: 'submit' } },
+//   { id: 'evt-3', type: 'view', timestamp: 999, data: { page: '/home' } },
+// ]
+// evt-2 filtered (error), duplicate evt-1 removed, sorted by timestamp desc
+```
+
+This pipeline does in one `pipe` chain what would take a handful of imperative loops, intermediate arrays, a Set-based deduplication, and a sort with a custom comparator — each requiring its own comments to explain intent.
+
+## Key Takeaways
+
+- **ReadonlyArray functions work with `pipe`** — they are standalone functions with data last, unlike native prototype methods
+- **`A.filterMap`** combines filtering and transformation in one pass — use it instead of `.filter(isValid).map(transform)` when the transform can fail
+- **`A.findFirst`** returns `O.Option<A>` instead of `A | undefined` — safe to chain with `O.map` and friends
+- **`A.partition`** splits an array in one pass — more efficient than filtering twice for matching and non-matching elements
+- **Performance trade-off**: fp-ts array functions create new arrays at each step — use imperative loops in hot paths; profile before optimizing

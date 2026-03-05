@@ -1,31 +1,285 @@
 ---
-title: "Task: Asynchronous Computations"
+title: "TaskEither: Async Operations with Typed Errors"
 day: 5
-description: "Represent async operations as lazy, composable values using Task, eliminating Promise chaining and enabling functional async pipelines."
+description: "TaskEither is the workhorse of real fp-ts applications — it combines Task's laziness with Either's typed error handling to model async computations that can fail."
+quiz:
+  - question: "What is TaskEither<E, A> equivalent to at the type level?"
+    options:
+      - "Either<Task<E>, Task<A>>"
+      - "() => Promise<Either<E, A>>"
+      - "Task<A> | Either<E, A>"
+    correct: 1
+    explanation: "TaskEither<E, A> is defined as Task<Either<E, A>>, which expands to () => Promise<Either<E, A>>. It is a lazy async computation that resolves to either a Left<E> (failure) or Right<A> (success). Nothing runs until you call the function."
+  - question: "What is the correct way to bridge a function that returns a rejected Promise into a TaskEither?"
+    options:
+      - "TE.fromTask with error handling"
+      - "TE.tryCatch(asyncFn, errorMapper)"
+      - "TE.left(asyncFn())"
+    correct: 1
+    explanation: "TE.tryCatch(thunk, onReject) executes the async thunk and wraps the resolved value in Right. If the Promise rejects or throws, the rejection reason is passed to onReject and the result is wrapped in Left. This is the standard bridge from Promise-based APIs to TaskEither."
+  - question: "What does TE.chain do when the current TaskEither is Left?"
+    options:
+      - "It executes the next step with the Left value as input"
+      - "It short-circuits and passes the Left through — the next step function is never called"
+      - "It automatically retries the previous step before passing to the next"
+    correct: 1
+    explanation: "TE.chain implements the railway model — if the current TaskEither is Left (failure track), subsequent TE.chain steps are skipped entirely. The Left value threads through unchanged until you handle it with TE.fold or TE.getOrElse. This is what makes error handling automatic in a pipeline."
 ---
 
-## Task as a Lazy Promise
+## Introduction
 
-A `Task<A>` is just a function `() => Promise<A>`. It is lazy — it doesn't run until you call it. This makes Tasks composable and easier to reason about.
+If you asked an experienced fp-ts developer "what is the single most important type in the library for real production code?", the overwhelming answer would be `TaskEither`. It is the combination of everything you have learned in Days 3 and 4: the laziness and async composition of `Task`, plus the typed error handling of `Either`.
 
-## Composing async operations
+In the real world, almost every interesting async operation can fail in meaningful, distinguishable ways. An HTTP request can fail with a network error, a 404, or a 500. A database query can return no results, or fail due to a constraint violation. A file read can fail because the file does not exist, or because of a permission error. None of these are exceptional bugs — they are expected domain conditions your application needs to handle gracefully.
+
+`TaskEither<E, A>` models all of these as a lazy function `() => Promise<Either<E, A>>`. The success case (`Right<A>`) and failure case (`Left<E>`) are both part of the type signature, making them impossible to ignore. The `E` type parameter forces you to document what can go wrong, and the TypeScript compiler enforces that you handle both cases before using the result.
+
+The mental model that helps most people understand TaskEither is "railway-oriented programming," popularized by Scott Wlaschin. Imagine two parallel train tracks: the **right rail** (success) and the **left rail** (failure). Operations applied via `TE.map` and `TE.chain` run on the right rail. If any step produces a Left (failure), the train switches to the left rail and all subsequent right-rail operations are skipped. The failure travels down the left rail until you explicitly handle it at the end of the pipeline with `TE.fold`.
+
+## Core API
+
+### Creating TaskEither values
+
+```typescript
+import * as TE from 'fp-ts/TaskEither'
+import * as E from 'fp-ts/Either'
+
+// TE.right — wrap a successful value in a Task (always resolves to Right)
+const success: TE.TaskEither<never, number> = TE.right(42)
+
+// TE.left — wrap an error value (always resolves to Left)
+const failure: TE.TaskEither<string, never> = TE.left('Not found')
+
+// TE.tryCatch — the most important constructor for real async code
+// Bridges Promise-based APIs into TaskEither
+const fetchUser = (id: string): TE.TaskEither<Error, unknown> =>
+  TE.tryCatch(
+    () => fetch(`/api/users/${id}`).then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`)
+      return r.json()
+    }),
+    (e) => e instanceof Error ? e : new Error(String(e))
+  )
+
+// TE.fromEither — lift an Either<E, A> into TaskEither<E, A>
+const fromEither: TE.TaskEither<string, number> = TE.fromEither(E.right(42))
+
+// TE.fromOption — lift Option<A> into TaskEither<E, A>
+import * as O from 'fp-ts/Option'
+const fromOption: TE.TaskEither<string, number> =
+  TE.fromOption(() => 'Value was None')(O.some(42))
+```
+
+### Transforming with map, mapLeft, chain
 
 ```typescript
 import { pipe } from 'fp-ts/function'
-import * as T from 'fp-ts/Task'
+import * as TE from 'fp-ts/TaskEither'
 
-const fetchUserId: T.Task<number> = () => Promise.resolve(42)
-
-const fetchUserName = (id: number): T.Task<string> =>
-  () => Promise.resolve(`User ${id}`)
-
-const program = pipe(
-  fetchUserId,
-  T.chain(fetchUserName)
+// TE.map — transform the Right value; Left passes through unchanged
+const doubled: TE.TaskEither<Error, number> = pipe(
+  TE.right(5),
+  TE.map((n) => n * 2)   // Right 10; still lazy
 )
 
-// Nothing runs until you call the Task
-program().then(console.log) // "User 42"
+// TE.mapLeft — transform the error type; Right passes through unchanged
+type AppError = { code: string; message: string }
+const normalized = pipe(
+  TE.left(new Error('fetch failed')) as TE.TaskEither<Error, number>,
+  TE.mapLeft((e): AppError => ({ code: 'FETCH_ERROR', message: e.message }))
+)
+
+// TE.chain — sequence dependent async operations
+// Only runs the next step if current is Right
+const fetchAndProcess = (id: string): TE.TaskEither<Error, string> =>
+  pipe(
+    fetchUser(id),                           // TE<Error, unknown>
+    TE.chain((raw) => {                      // runs only if fetchUser succeeded
+      if (typeof (raw as any).name !== 'string') {
+        return TE.left(new Error('Invalid user response'))
+      }
+      return TE.right(`Hello, ${(raw as any).name}!`)
+    })
+  )
 ```
 
-Tasks compose cleanly without the complexity of Promise chaining or async/await nesting.
+### The full railway: sequential pipeline
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as TE from 'fp-ts/TaskEither'
+
+type DbError = 'connection-failed' | 'not-found' | 'constraint-violation'
+
+interface User { id: string; email: string }
+interface Post { id: string; title: string; authorId: string }
+interface Notification { userId: string; message: string }
+
+declare const findUser: (email: string) => TE.TaskEither<DbError, User>
+declare const findPostsByAuthor: (userId: string) => TE.TaskEither<DbError, ReadonlyArray<Post>>
+declare const sendNotification: (n: Notification) => TE.TaskEither<Error, void>
+
+const notifyActiveAuthor = (email: string): TE.TaskEither<DbError | Error, void> =>
+  pipe(
+    findUser(email),                                // Step 1: find user
+    TE.chain((user) =>
+      pipe(
+        findPostsByAuthor(user.id),                // Step 2: find their posts (only if user found)
+        TE.chain((posts) => {
+          if (posts.length === 0) return TE.right(undefined)  // no posts, nothing to do
+          return sendNotification({               // Step 3: send notification (only if posts exist)
+            userId: user.id,
+            message: `You have ${posts.length} published post(s).`
+          })
+        })
+      )
+    )
+  )
+```
+
+### Exiting the railway — fold and match
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as TE from 'fp-ts/TaskEither'
+
+// TE.fold / TE.match — handle both Left and Right, return a Task<B>
+const renderResult = pipe(
+  fetchUser('123'),
+  TE.fold(
+    (err) => () => Promise.resolve(`Error: ${err.message}`),   // Task<string>
+    (user) => () => Promise.resolve(`User: ${JSON.stringify(user)}`)  // Task<string>
+  )
+)
+
+// Execute and get the final string
+const message = await renderResult()
+
+// TE.getOrElse — extract Right or compute fallback from Left
+const userOrDefault = pipe(
+  fetchUser('999'),
+  TE.getOrElse((err) => () => Promise.resolve({ id: 'unknown', email: 'none' }))
+)
+```
+
+## When to Use / When NOT to Use
+
+### Use TaskEither when:
+
+- The async operation can fail in ways callers need to handle differently (HTTP errors, DB errors, validation failures)
+- You are building a pipeline of async steps where any step might fail
+- You want typed error handling without try/catch scattering throughout your code
+- You are calling external services (HTTP APIs, databases, file system) from within your domain logic
+
+### Do NOT use TaskEither when:
+
+**The async operation cannot fail with a typed error.** If you are reading from an in-memory cache that always succeeds, use `Task<A>`. Adding `TaskEither<never, A>` is just extra ceremony.
+
+**You are handling unrecoverable errors.** A genuine programmer error (undefined is not a function, stack overflow) is not a domain error — it is a bug. Let it throw and handle it at the top-level error boundary. Do not model unrecoverable errors as `Left`.
+
+**You just want to add error logging.** If you only need to log errors and move on, a simple try/catch around the entire operation may be clearer than a full TaskEither pipeline. TaskEither shines when you need to branch behavior based on the error type.
+
+**The operation is synchronous.** For synchronous fallible computations, use `Either<E, A>` directly.
+
+## Real-World Example
+
+A full HTTP → validate → database pipeline — the three-step chain that appears in nearly every fp-ts web service.
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as TE from 'fp-ts/TaskEither'
+import * as E from 'fp-ts/Either'
+
+// Error types for each layer
+type HttpError = { kind: 'http'; status: number; body: string }
+type ValidationError = { kind: 'validation'; field: string; message: string }
+type DbError = { kind: 'db'; code: string }
+type AppError = HttpError | ValidationError | DbError
+
+interface CreateUserRequest { email: string; name: string }
+interface User { id: string; email: string; name: string }
+
+// Step 1: Parse and validate the incoming request body
+const validateRequest = (
+  body: unknown
+): E.Either<ValidationError, CreateUserRequest> => {
+  if (typeof body !== 'object' || body === null)
+    return E.left({ kind: 'validation', field: 'body', message: 'Expected object' })
+  const { email, name } = body as Record<string, unknown>
+  if (typeof email !== 'string' || !email.includes('@'))
+    return E.left({ kind: 'validation', field: 'email', message: 'Invalid email' })
+  if (typeof name !== 'string' || name.trim().length === 0)
+    return E.left({ kind: 'validation', field: 'name', message: 'Name required' })
+  return E.right({ email: email.toLowerCase(), name: name.trim() })
+}
+
+// Step 2: Check if user already exists
+const checkUserNotExists = (
+  email: string
+): TE.TaskEither<DbError, void> =>
+  TE.tryCatch(
+    async () => {
+      const existing = await db.users.findByEmail(email)
+      if (existing) throw Object.assign(new Error('duplicate'), { code: 'DUPLICATE_EMAIL' })
+    },
+    (e: any): DbError => ({ kind: 'db', code: e.code ?? 'UNKNOWN' })
+  )
+
+// Step 3: Insert the new user
+const insertUser = (
+  req: CreateUserRequest
+): TE.TaskEither<DbError, User> =>
+  TE.tryCatch(
+    () => db.users.insert(req),
+    (e: any): DbError => ({ kind: 'db', code: e.code ?? 'INSERT_FAILED' })
+  )
+
+// Full pipeline — composes all three steps
+const createUser = (body: unknown): TE.TaskEither<AppError, User> =>
+  pipe(
+    TE.fromEither(validateRequest(body)),         // sync validation lifted to TE
+    TE.chain((req) =>
+      pipe(
+        checkUserNotExists(req.email),            // async check
+        TE.chain(() => insertUser(req))           // async insert (only if no duplicate)
+      )
+    )
+  )
+
+// HTTP handler usage
+async function handleCreateUser(req: Request): Promise<Response> {
+  const body = await req.json()
+
+  return pipe(
+    createUser(body),
+    TE.fold(
+      (err): TE.TaskEither<never, Response> => {
+        switch (err.kind) {
+          case 'validation':
+            return TE.right(new Response(JSON.stringify({ error: err.message, field: err.field }), { status: 400 }))
+          case 'db':
+            if (err.code === 'DUPLICATE_EMAIL')
+              return TE.right(new Response('Email already registered', { status: 409 }))
+            return TE.right(new Response('Database error', { status: 500 }))
+          case 'http':
+            return TE.right(new Response('Service error', { status: 502 }))
+        }
+      },
+      (user) => TE.right(new Response(JSON.stringify(user), { status: 201 }))
+    )
+  )()
+}
+
+// Placeholder for illustration
+declare const db: { users: { findByEmail: (e: string) => Promise<User | null>; insert: (r: CreateUserRequest) => Promise<User> } }
+```
+
+The pipeline reads as a specification: validate the request, then check for duplicates, then insert. Each step has a typed error. The HTTP handler has exhaustive error handling via the switch statement.
+
+## Key Takeaways
+
+- **`TaskEither<E, A>` is `() => Promise<Either<E, A>>`** — lazy async computation with typed success and failure
+- **`TE.tryCatch(thunk, onReject)`** is the bridge from Promise-based APIs — use it at integration boundaries, not throughout domain logic
+- **`TE.chain`** implements the railway model — Left values skip subsequent steps automatically
+- **`TE.fold`** is your exit: provide handlers for both Left and Right, convert TaskEither back to a plain Task (and then call it to get the Promise)
+- **This is the most common fp-ts pattern** in real applications — HTTP handlers, database access, and external service calls almost always become `TaskEither` pipelines

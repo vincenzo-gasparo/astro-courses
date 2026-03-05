@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { useMDXComponent } from '@/lib/mdx'
 import { Pre } from '@/components/mdx/pre'
+import { Quiz } from '@/components/mdx/quiz'
 
 // REQUIRED for static export: every dynamic route must export generateStaticParams
 // Source: https://nextjs.org/docs/app/api-reference/functions/generate-static-params
@@ -42,6 +43,10 @@ export default async function LessonPage({ params }: { params: Promise<{ slug: s
       <article className="prose prose-zinc dark:prose-invert max-w-none">
         <MDXContent components={{ pre: Pre }} />
       </article>
+
+      {lesson.quiz && lesson.quiz.length > 0 && (
+        <Quiz items={lesson.quiz} />
+      )}
 
       <nav className="mt-12 flex justify-between border-t pt-6">
         {prev ? (

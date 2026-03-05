@@ -12,8 +12,9 @@ test.describe('quiz — EXER-01', () => {
   test('clicking correct answer highlights it green', async ({ page }) => {
     await page.goto('/lessons/day-01')
     const quizSection = page.locator('section[aria-label="Quiz"]')
-    // The correct option button should be marked with data-correct attribute
-    const correctBtn = quizSection.locator('button[data-correct="true"]')
+    // Scope to the first question div to avoid strict-mode violation (3 questions = 3 correct buttons)
+    const firstQuestion = quizSection.locator('div').first()
+    const correctBtn = firstQuestion.locator('button[data-correct="true"]')
     await correctBtn.click()
     await expect(correctBtn).toHaveAttribute('data-variant', 'correct')
   })
@@ -31,9 +32,11 @@ test.describe('quiz — EXER-01', () => {
   test('correct option is revealed when wrong answer is chosen', async ({ page }) => {
     await page.goto('/lessons/day-01')
     const quizSection = page.locator('section[aria-label="Quiz"]')
-    const wrongBtn = quizSection.locator('button[data-correct="false"]').first()
+    // Scope to the first question div to avoid strict-mode violation (3 questions = 3 correct buttons)
+    const firstQuestion = quizSection.locator('div').first()
+    const wrongBtn = firstQuestion.locator('button[data-correct="false"]').first()
     await wrongBtn.click()
-    const correctBtn = quizSection.locator('button[data-correct="true"]')
+    const correctBtn = firstQuestion.locator('button[data-correct="true"]')
     await expect(correctBtn).toHaveAttribute('data-variant', 'correct')
   })
 

@@ -27,6 +27,7 @@ export function DayCardList({ lessons }: Props) {
             key={lesson.day}
             href={`/lessons/${slug}`}
             data-testid="day-card"
+            data-day={lesson.day}
             data-complete={done ? 'true' : 'false'}
             className="flex items-center gap-4 rounded-lg border p-4 transition hover:bg-zinc-50 dark:hover:bg-zinc-800"
           >

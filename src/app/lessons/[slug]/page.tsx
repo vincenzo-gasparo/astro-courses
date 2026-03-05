@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useMDXComponent } from '@/lib/mdx'
 import { Pre } from '@/components/mdx/pre'
 import { Quiz } from '@/components/mdx/quiz'
+import { MarkCompleteButton } from '@/components/mark-complete-button'
 
 // REQUIRED for static export: every dynamic route must export generateStaticParams
 // Source: https://nextjs.org/docs/app/api-reference/functions/generate-static-params
@@ -47,6 +48,10 @@ export default async function LessonPage({ params }: { params: Promise<{ slug: s
       {lesson.quiz && lesson.quiz.length > 0 && (
         <Quiz items={lesson.quiz} />
       )}
+
+      <div className="mt-8">
+        <MarkCompleteButton day={lesson.day} />
+      </div>
 
       <nav className="mt-12 flex justify-between border-t pt-6">
         {prev ? (

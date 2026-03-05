@@ -1,56 +1,267 @@
 ---
-title: "Real-world patterns: HTTP clients with fp-ts"
+title: "Real-World Integration: Putting It All Together"
 day: 15
-description: "Build a complete, production-ready HTTP client using TaskEither, with typed errors, retry logic, and composable request pipelines."
+description: "Build a complete realistic fp-ts application combining Option, Either, TaskEither, and pipe — the capstone lesson showing how the pieces fit together."
+quiz:
+  - question: "In the complete example, why is TaskEither used to fetch the external profile rather than plain fetch with async/await?"
+    options:
+      - "TaskEither is faster than async/await"
+      - "TaskEither makes the failure case explicit in the return type — callers see Either<AppError, Profile> instead of a thrown exception"
+      - "async/await does not work in TypeScript"
+    correct: 1
+    explanation: "TaskEither<E, A> encodes both outcomes in the type: Left<E> for failure, Right<A> for success. Callers are forced to handle errors — the type system won't let them ignore them. With async/await, thrown exceptions are invisible in the return type."
+  - question: "What happens to the rest of the pipeline when the Either validation step (Step 1) fails?"
+    options:
+      - "The pipeline continues but skips the failed step"
+      - "All subsequent chain steps are short-circuited — the Left error propagates to the end without executing later steps"
+      - "An exception is thrown"
+    correct: 1
+    explanation: "Either and TaskEither are both monadic — chain only executes the next step if the current value is Right. A Left value short-circuits: it skips all remaining chain/map steps and propagates unchanged to the final fold."
+  - question: "Why is Option used for the user preferences lookup rather than Either?"
+    options:
+      - "Option is faster than Either"
+      - "Missing preferences is not an error — it is an expected absence of a value. Option models 'might not exist'; Either models 'might have failed'."
+      - "Either cannot hold a preferences object"
+    correct: 1
+    explanation: "Option<A> models the presence or absence of a value (Some or None). Either<E, A> models success or failure with a typed error. Missing preferences is normal application behavior — using Either would require inventing an error type for a non-error situation."
 ---
 
-## A Production fp-ts HTTP Client
+## Introduction
 
-By this final day, you have all the tools to build a complete HTTP client. TaskEither handles async errors, pipe composes operations, and typed errors give you exhaustive error handling.
+Over the past 14 days you have learned the core fp-ts modules one at a time. Today brings them together. There is no new module to introduce — instead, you will see how `Option`, `Either`, `TaskEither`, and `pipe` compose into a complete, realistic application feature.
 
-## Complete HTTP client pattern
+The scenario is a **user profile service**. When a client requests a user's profile page, the service must:
+
+1. **Validate** the incoming request data (using `Either` for typed validation errors)
+2. **Look up optional preferences** (using `Option` for nullable/absent data)
+3. **Fetch external profile data** from an API (using `TaskEither` for async + error handling)
+4. **Combine and transform** the results (using `pipe` + `map`/`chain`)
+5. **Return** a structured result or a typed error
+
+This mirrors real production code: validation at the boundary, safe nullables in the domain, async I/O for external calls, and typed errors at every step.
+
+## The Complete Example
 
 ```typescript
 import { pipe } from 'fp-ts/function'
+import * as O from 'fp-ts/Option'
+import * as E from 'fp-ts/Either'
 import * as TE from 'fp-ts/TaskEither'
 
-type HttpError =
-  | { _tag: 'NetworkError'; message: string }
-  | { _tag: 'ParseError'; message: string }
-  | { _tag: 'NotFound' }
+// --- Domain types ---
+
+type UserId = number
+
+type RequestData = {
+  userId: unknown  // raw input — shape is unknown until validated
+  includeAvatar?: boolean
+}
+
+type UserPreferences = {
+  displayName: string
+  theme: 'light' | 'dark'
+  avatarUrl: string | null
+}
+
+type ExternalProfile = {
+  userId: number
+  bio: string
+  followers: number
+  createdAt: string
+}
+
+type ProfilePage = {
+  userId:      UserId
+  displayName: string
+  bio:         string
+  followers:   number
+  theme:       'light' | 'dark'
+  avatarUrl:   string | null
+}
+
+type AppError =
+  | { _tag: 'ValidationError'; field: string; message: string }
+  | { _tag: 'NetworkError';    message: string }
+  | { _tag: 'NotFound';        resource: string }
   | { _tag: 'Unauthorized' }
 
-const fetchJson = <T>(url: string): TE.TaskEither<HttpError, T> =>
+// --- Step 1: Validate the incoming request ---
+// Either for validation — invalid input is a typed error, not an exception
+
+const validateRequest = (data: RequestData): E.Either<AppError, UserId> => {
+  const id = Number(data.userId)
+  if (isNaN(id) || id <= 0) {
+    return E.left({
+      _tag: 'ValidationError',
+      field: 'userId',
+      message: `Expected a positive integer, got: ${String(data.userId)}`,
+    })
+  }
+  return E.right(id as UserId)
+}
+
+// --- Step 2: Load optional user preferences ---
+// Option because missing preferences is expected behavior, not an error
+
+declare const preferencesStore: Map<UserId, UserPreferences>
+
+const loadPreferences = (userId: UserId): O.Option<UserPreferences> =>
+  O.fromNullable(preferencesStore.get(userId))
+
+const getDisplayName = (prefs: O.Option<UserPreferences>): string =>
+  pipe(
+    prefs,
+    O.map(p => p.displayName),
+    O.getOrElse(() => `User #${Math.random()}`) // fallback if no prefs
+  )
+
+const getTheme = (prefs: O.Option<UserPreferences>): 'light' | 'dark' =>
+  pipe(
+    prefs,
+    O.map(p => p.theme),
+    O.getOrElse((): 'light' | 'dark' => 'light') // default theme
+  )
+
+const getAvatarUrl = (prefs: O.Option<UserPreferences>, include: boolean): string | null =>
+  include
+    ? pipe(prefs, O.chain(p => O.fromNullable(p.avatarUrl)), O.toNullable)
+    : null
+
+// --- Step 3: Fetch external profile data ---
+// TaskEither because network I/O is async and can fail
+
+declare const httpClient: {
+  get: <T>(url: string) => Promise<T>
+}
+
+const fetchExternalProfile = (userId: UserId): TE.TaskEither<AppError, ExternalProfile> =>
   TE.tryCatch(
     async () => {
-      const res = await fetch(url)
-      if (res.status === 404) throw { _tag: 'NotFound' } as HttpError
-      if (res.status === 401) throw { _tag: 'Unauthorized' } as HttpError
-      return res.json() as Promise<T>
+      const profile = await httpClient.get<ExternalProfile>(
+        `https://api.example.com/profiles/${userId}`
+      )
+      return profile
     },
-    (e): HttpError =>
-      e && typeof e === 'object' && '_tag' in e
-        ? e as HttpError
-        : { _tag: 'NetworkError', message: String(e) }
+    (err): AppError => {
+      if (err instanceof Response && err.status === 404) {
+        return { _tag: 'NotFound', resource: `profile for user ${userId}` }
+      }
+      if (err instanceof Response && err.status === 401) {
+        return { _tag: 'Unauthorized' }
+      }
+      return { _tag: 'NetworkError', message: String(err) }
+    }
   )
 
-type User = { id: number; name: string }
+// --- Step 4: Combine everything into the final result ---
 
-const getUser = (id: number): TE.TaskEither<HttpError, User> =>
+const buildProfile = (
+  userId:  UserId,
+  prefs:   O.Option<UserPreferences>,
+  profile: ExternalProfile,
+  request: RequestData
+): ProfilePage => ({
+  userId,
+  displayName: getDisplayName(prefs),
+  bio:         profile.bio,
+  followers:   profile.followers,
+  theme:       getTheme(prefs),
+  avatarUrl:   getAvatarUrl(prefs, request.includeAvatar ?? false),
+})
+
+// --- Step 5: The complete pipeline ---
+
+const getProfilePage = (
+  request: RequestData
+): TE.TaskEither<AppError, ProfilePage> =>
   pipe(
-    fetchJson<User>(`https://api.example.com/users/${id}`),
-    TE.mapLeft(err => err)
+    // Step 1: Validate — Either<AppError, UserId>
+    validateRequest(request),
+
+    // Lift from Either to TaskEither so we can chain async steps
+    TE.fromEither,
+
+    // Step 2: Load preferences (sync, cannot fail — lift with TE.of)
+    TE.chain(userId => {
+      const prefs = loadPreferences(userId)
+
+      // Step 3: Fetch external profile (async, can fail)
+      return pipe(
+        fetchExternalProfile(userId),
+
+        // Step 4: Combine userId + prefs + profile into ProfilePage
+        TE.map(profile => buildProfile(userId, prefs, profile, request))
+      )
+    })
   )
 
-const program = pipe(
-  getUser(1),
-  TE.fold(
-    err => () => Promise.resolve(`Error: ${err._tag}`),
-    user => () => Promise.resolve(`Hello, ${user.name}!`)
-  )
-)
+// --- Step 5: Execute at the program edge ---
 
-program().then(console.log)
+const renderResult = async (request: RequestData): Promise<string> => {
+  const result = await getProfilePage(request)()
+
+  return E.fold(
+    (err: AppError): string => {
+      switch (err._tag) {
+        case 'ValidationError':
+          return `400 Bad Request: ${err.field} — ${err.message}`
+        case 'NotFound':
+          return `404 Not Found: ${err.resource}`
+        case 'Unauthorized':
+          return `401 Unauthorized`
+        case 'NetworkError':
+          return `502 Bad Gateway: ${err.message}`
+      }
+    },
+    (page: ProfilePage): string =>
+      `Profile for ${page.displayName}: ${page.bio} (${page.followers} followers)`
+  )(result)
+}
 ```
 
-Congratulations on completing the fp-ts course. You now have the tools to build robust, type-safe functional programs in TypeScript.
+## Patterns Recap
+
+Over 15 days you have learned — and just applied — the five core fp-ts patterns:
+
+**Pattern 1 — pipe for left-to-right composition**
+Every pipeline in this example uses `pipe`. It threads a value through a sequence of transformations without intermediate variables, making the data flow explicit and readable.
+
+**Pattern 2 — Option for nullable domain values**
+`O.fromNullable`, `O.map`, `O.getOrElse`, `O.chain` — Option models the difference between "absent" and "an error". Missing preferences are not failures; they are expected. Use `null | undefined` as input, use `Option` inside your domain.
+
+**Pattern 3 — Either for typed validation and domain errors**
+`E.left` / `E.right`, `E.chain`, `E.fold` — Either makes error handling a first-class concern encoded in the type. Instead of throwing an exception from `validateRequest`, we return `E.left` with a structured error object. Callers handle it in `E.fold` with exhaustive switch logic.
+
+**Pattern 4 — TaskEither for async + error handling**
+`TE.tryCatch`, `TE.fromEither`, `TE.chain`, `TE.map` — TaskEither is the workhorse for I/O. It lifts async operations into the same Either-based error model, letting you compose validation, database calls, and API calls in one pipeline without mixing async/await with try/catch.
+
+**Pattern 5 — Execute at the edge**
+The fp-ts style keeps your domain logic as pure descriptions of what to do. All actual execution (providing environments, calling `()`, awaiting Promises, pattern-matching on the result) happens at the program's edge — in handlers, controllers, or main functions. This makes the domain logic easily testable in isolation.
+
+## When to Use This Approach
+
+fp-ts is a significant investment. Here is an honest guide to when it is worth it:
+
+**Bring fp-ts in when:**
+- Your team works on a medium-to-large TypeScript codebase and correctness matters (finance, health, infrastructure)
+- Error handling is currently inconsistent — some functions throw, some return `null`, some return error codes
+- You want to eliminate a class of null reference errors at compile time
+- The team is willing to invest 1-2 weeks in learning the patterns (Days 1-15 is that investment)
+- You have complex async workflows where the error propagation is hard to follow
+
+**Simpler alternatives may be better when:**
+- The codebase is small or the feature is a prototype — the learning curve is real
+- The team is mostly new to TypeScript — master TypeScript first
+- Your async operations are mostly one-off fetch calls — plain async/await is excellent for that
+- You need to onboard many junior developers quickly — the cognitive overhead is high initially
+
+fp-ts is not a silver bullet. It is a tool for teams that have decided typed functional programming's benefits outweigh its costs. After 15 days, you can make that decision with full knowledge of what the library offers.
+
+## Key Takeaways
+
+- `Option` models **presence or absence** of a value — use it for nullable domain data, not for errors
+- `Either` models **success or typed failure** — use it for validation, decoding, and any operation with a meaningful error value
+- `TaskEither` models **async + fallible** — lift async operations with `TE.tryCatch`, compose with `TE.chain`
+- `pipe` threads values through transformations left-to-right — the foundation of every fp-ts pipeline
+- Execute at the edge: build pure descriptions of what to do, then provide environments and call `()` / `await` at the boundary
+- fp-ts shines on correctness-critical, medium-to-large TypeScript codebases — evaluate the team's readiness before adopting

@@ -1,36 +1,318 @@
 ---
-title: "IO: Synchronous Side Effects"
+title: "ReaderTaskEither: Dependency Injection + Async + Error Handling"
 day: 13
-description: "Encapsulate synchronous side effects in IO to make them explicit, testable, and composable within functional pipelines."
+description: "Master ReaderTaskEither — the 'full stack' fp-ts type combining Reader (DI), Task (async), and Either (errors) into a single powerful abstraction."
+quiz:
+  - question: "What three concerns does ReaderTaskEither unify?"
+    options:
+      - "Parsing, validation, and rendering"
+      - "Dependency injection (Reader), asynchronous effects (Task), and typed error handling (Either)"
+      - "Logging, metrics, and tracing"
+    correct: 1
+    explanation: "ReaderTaskEither<Env, E, A> = Reader + Task + Either. It models: 'given an environment, perform an async operation that may fail with error E or succeed with value A'."
+  - question: "How do you execute a ReaderTaskEither<Env, E, A>?"
+    options:
+      - "You call it with the environment, then call the resulting TaskEither: program(env)()"
+      - "You await it directly"
+      - "You use RTE.run(program, env)"
+    correct: 0
+    explanation: "RTE<Env, E, A> is Env => TaskEither<E, A>, which is Env => () => Promise<Either<E, A>>. Execute: program(env)() — provide env, then call the Task to get a Promise."
+  - question: "When should you use TaskEither instead of ReaderTaskEither?"
+    options:
+      - "When you need async operations"
+      - "When you don't need dependency injection — the dependencies can be passed as plain function arguments or are available in scope"
+      - "When you need error handling"
+    correct: 1
+    explanation: "ReaderTaskEither earns its complexity when you need the Reader layer — i.e., when many functions share a common environment that you want to inject once at the edge. If your function only needs 1-2 deps, passing them as arguments and using TaskEither is simpler."
 ---
 
-## Taming Side Effects with IO
+## Introduction
 
-`IO<A>` is a thunk `() => A` that wraps a synchronous side effect. By wrapping side effects in IO, you keep your pure functions pure and make effects explicit.
+By Day 12 you have seen the three main concerns that arise in real-world programs:
 
-## Using IO for side effects
+1. **Dependency injection** (Reader) — making config, loggers, and clients explicit in the type
+2. **Async operations** (Task) — Promises that are lazy and composable
+3. **Typed error handling** (Either) — making failures first-class values
+
+`ReaderTaskEither<Env, E, A>` is the type that unifies all three. It is:
+
+```
+ReaderTaskEither<Env, E, A> = Env => TaskEither<E, A>
+                             = Env => () => Promise<Either<E, A>>
+```
+
+Given an environment `Env`, perform an async computation that either fails with `E` or succeeds with `A`. This is the "full stack" fp-ts type — the one that shows up in service layers, domain logic, and anywhere you want clean, testable async code with dependency injection.
+
+## Core API
 
 ```typescript
 import { pipe } from 'fp-ts/function'
-import * as IO from 'fp-ts/IO'
-
-// Wrapping impure operations in IO
-const getTimestamp: IO.IO<number> = () => Date.now()
-
-const getRandomInt = (max: number): IO.IO<number> =>
-  () => Math.floor(Math.random() * max)
-
-const generateId: IO.IO<string> = pipe(
-  getTimestamp,
-  IO.chain(ts => pipe(
-    getRandomInt(1000),
-    IO.map(rand => `${ts}-${rand}`)
-  ))
-)
-
-// Nothing runs until you execute the IO
-const id = generateId()
-console.log(id) // e.g. "1709123456789-342"
+import * as RTE from 'fp-ts/ReaderTaskEither'
+import * as TE from 'fp-ts/TaskEither'
+import * as E from 'fp-ts/Either'
 ```
 
-IO makes it clear where side effects happen. Functions that return IO are pure — the IO is just a description of an effect.
+### RTE.right / RTE.left — lift values
+
+```typescript
+const succeed: RTE.ReaderTaskEither<unknown, never, number> = RTE.right(42)
+const fail: RTE.ReaderTaskEither<unknown, string, never>   = RTE.left('error')
+```
+
+### RTE.ask — access the environment
+
+```typescript
+type AppEnv = {
+  db: { query: (sql: string) => Promise<unknown[]> }
+  logger: { info: (msg: string) => void }
+}
+
+const getDb: RTE.ReaderTaskEither<AppEnv, never, AppEnv['db']> =
+  pipe(
+    RTE.ask<AppEnv>(),
+    RTE.map(env => env.db)
+  )
+```
+
+### RTE.tryCatch — wrapping async operations
+
+```typescript
+type User = { id: number; name: string; email: string }
+type DbError = { _tag: 'DbError'; message: string }
+
+const findUser = (id: number): RTE.ReaderTaskEither<AppEnv, DbError, User> =>
+  (env) => TE.tryCatch(
+    async () => {
+      const rows = await env.db.query(`SELECT * FROM users WHERE id = ${id}`)
+      const user = rows[0]
+      if (!user) throw new Error(`User ${id} not found`)
+      return user as User
+    },
+    (err): DbError => ({ _tag: 'DbError', message: String(err) })
+  )
+```
+
+### RTE.fromTaskEither — lift a TaskEither into RTE
+
+When you have a TaskEither (no env needed) and want to use it in an RTE program:
+
+```typescript
+const fetchData = (url: string): TE.TaskEither<string, unknown> =>
+  TE.tryCatch(
+    () => fetch(url).then(r => r.json()),
+    err => String(err)
+  )
+
+// Lift to RTE — env is available but not used by this step
+const fetchDataRTE = (url: string): RTE.ReaderTaskEither<AppEnv, string, unknown> =>
+  RTE.fromTaskEither(fetchData(url))
+```
+
+### RTE.map / RTE.mapLeft — transform success or error
+
+```typescript
+const findUserName = (id: number): RTE.ReaderTaskEither<AppEnv, string, string> =>
+  pipe(
+    findUser(id),
+    RTE.map(user => user.name),                         // transform success
+    RTE.mapLeft(err => `Database error: ${err.message}`) // transform error
+  )
+```
+
+### RTE.chain — sequence async steps
+
+The main composition operator — each step gets access to the previous result:
+
+```typescript
+type Post = { userId: number; title: string }
+type AppError = DbError | { _tag: 'NotFound'; id: number }
+
+const getUserPosts = (userId: number): RTE.ReaderTaskEither<AppEnv, AppError, Post[]> =>
+  (env) => TE.tryCatch(
+    async () => {
+      const rows = await env.db.query(`SELECT * FROM posts WHERE user_id = ${userId}`)
+      return rows as Post[]
+    },
+    (err): AppError => ({ _tag: 'DbError', message: String(err) })
+  )
+
+// Three-step program: find user → log → fetch their posts
+const userWithPosts = (id: number): RTE.ReaderTaskEither<AppEnv, AppError, { user: User; posts: Post[] }> =>
+  pipe(
+    findUser(id),                          // RTE<AppEnv, AppError, User>
+    RTE.chainFirst(user =>                 // log without changing the pipeline value
+      (env: AppEnv): TE.TaskEither<AppError, void> =>
+        TE.right(env.logger.info(`Found user: ${user.name}`))
+    ),
+    RTE.chain(user =>                      // fetch posts using user from previous step
+      pipe(
+        getUserPosts(user.id),
+        RTE.map(posts => ({ user, posts }))
+      )
+    )
+  )
+```
+
+### Executing at the program edge
+
+```typescript
+// Define the concrete environment once
+const productionEnv: AppEnv = {
+  db: {
+    query: (sql) => {
+      // real database call
+      return Promise.resolve([])
+    }
+  },
+  logger: { info: (msg) => console.log(msg) },
+}
+
+// Execute: provide env → call Task → await Promise
+const result = await userWithPosts(42)(productionEnv)()
+// Either<AppError, { user: User; posts: Post[] }>
+```
+
+## When to Use / When NOT to Use
+
+**Use `ReaderTaskEither` when:**
+
+- You have a service layer where multiple async functions share a common environment (database client, logger, HTTP client, config)
+- You want dependencies to be swappable in tests without module mocking — just pass a different `env` object
+- You are building a program that is fully async + fallible + environment-dependent
+- You want a single type that captures the "shape" of a service module
+
+**Do NOT use `ReaderTaskEither` when:**
+
+- **You don't need dependency injection.** If your dependencies are readily available via import or closure, use `TaskEither` instead. Adding Reader to a function that needs no DI is pure ceremony.
+- **The Reader environment is trivial (1-2 deps).** If you only need a logger, pass it as a plain function argument. `RTE.tryCatch(fn, errMap)` as a full reader is overkill for one dependency.
+- **Your team is not yet comfortable with TaskEither.** ReaderTaskEither requires understanding Reader AND TaskEither simultaneously. Master each separately first.
+- **Simple async operations.** For a one-off `fetch` call, a plain `async` function or `TaskEither` is easier to understand and maintain.
+
+## Real-World Example: Service Layer with Dependency Injection
+
+A realistic user service that uses `{ db, logger }` from its environment for all operations:
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as RTE from 'fp-ts/ReaderTaskEither'
+import * as TE from 'fp-ts/TaskEither'
+import * as E from 'fp-ts/Either'
+
+// --- Types ---
+
+type User = { id: number; name: string; email: string }
+type Post = { id: number; userId: number; title: string }
+
+type ServiceError =
+  | { _tag: 'NotFound';    resource: string; id: number }
+  | { _tag: 'DbError';     message: string }
+  | { _tag: 'Unauthorized' }
+
+type ServiceEnv = {
+  db: {
+    findUser:  (id: number)     => Promise<User | null>
+    findPosts: (userId: number) => Promise<Post[]>
+    saveUser:  (user: Omit<User, 'id'>) => Promise<User>
+  }
+  logger: {
+    info:  (msg: string) => void
+    error: (msg: string) => void
+  }
+  auth: {
+    currentUserId: () => number | null
+  }
+}
+
+// --- Service functions ---
+
+const requireAuth: RTE.ReaderTaskEither<ServiceEnv, ServiceError, number> =
+  env => TE.fromEither(
+    E.fromNullable<ServiceError>({ _tag: 'Unauthorized' })(env.auth.currentUserId())
+  )
+
+const getUser = (id: number): RTE.ReaderTaskEither<ServiceEnv, ServiceError, User> =>
+  env => TE.tryCatch(
+    async () => {
+      const user = await env.db.findUser(id)
+      if (!user) throw { _tag: 'NotFound', resource: 'user', id } as ServiceError
+      return user
+    },
+    (err): ServiceError =>
+      typeof err === 'object' && err !== null && '_tag' in err
+        ? err as ServiceError
+        : { _tag: 'DbError', message: String(err) }
+  )
+
+const getUserPosts = (userId: number): RTE.ReaderTaskEither<ServiceEnv, ServiceError, Post[]> =>
+  env => TE.tryCatch(
+    () => env.db.findPosts(userId),
+    (err): ServiceError => ({ _tag: 'DbError', message: String(err) })
+  )
+
+// --- Composed program ---
+
+const getProfilePage = (
+  targetUserId: number
+): RTE.ReaderTaskEither<ServiceEnv, ServiceError, { user: User; posts: Post[] }> =>
+  pipe(
+    requireAuth,                           // verify caller is authenticated
+    RTE.chain(_callerId =>
+      getUser(targetUserId)                // fetch target user
+    ),
+    RTE.chainFirst(user =>
+      (env: ServiceEnv) =>
+        TE.right(env.logger.info(`Profile viewed: ${user.name}`))
+    ),
+    RTE.chain(user =>
+      pipe(
+        getUserPosts(user.id),
+        RTE.map(posts => ({ user, posts }))
+      )
+    )
+  )
+
+// --- Execute at the edge ---
+
+const run = async (env: ServiceEnv): Promise<void> => {
+  const result = await getProfilePage(42)(env)()
+
+  E.fold(
+    (err: ServiceError) => {
+      switch (err._tag) {
+        case 'Unauthorized': console.error('Not logged in'); break
+        case 'NotFound':     console.error(`${err.resource} ${err.id} not found`); break
+        case 'DbError':      console.error(`DB error: ${err.message}`); break
+      }
+    },
+    ({ user, posts }) => {
+      console.log(`${user.name} has ${posts.length} posts`)
+    }
+  )(result)
+}
+```
+
+In tests, you swap `env` with a mock — no module mocking, no global mutation:
+
+```typescript
+const testEnv: ServiceEnv = {
+  db: {
+    findUser:  async (id) => id === 42 ? { id: 42, name: 'Alice', email: 'a@a.com' } : null,
+    findPosts: async () => [{ id: 1, userId: 42, title: 'Hello' }],
+    saveUser:  async (u) => ({ ...u, id: 99 }),
+  },
+  logger: { info: jest.fn(), error: jest.fn() },
+  auth:   { currentUserId: () => 1 },
+}
+
+const result = await getProfilePage(42)(testEnv)()
+// E.right({ user: { id: 42, name: 'Alice', ... }, posts: [...] })
+```
+
+## Key Takeaways
+
+- `ReaderTaskEither<Env, E, A>` = `Env => () => Promise<Either<E, A>>` — dependency injection + async + error handling in one type
+- Execute with two steps: `program(env)()` — provide the environment, then call the Task
+- `RTE.fromTaskEither` lifts a TaskEither into RTE when a step doesn't need the environment
+- Use `RTE.chainFirst` for logging/side-effects that don't change the pipeline's value
+- ReaderTaskEither shines in service layers where many functions share the same environment object
+- If you don't need DI, use `TaskEither` — adding Reader without a need adds ceremony without benefit

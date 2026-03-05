@@ -1,0 +1,273 @@
+---
+title: "Before You Start: Functional Programming Foundations"
+day: 0
+description: "The concepts you need to understand before diving into fp-ts: pure functions, immutability, currying, and function composition — explained in plain language with examples."
+quiz:
+  - question: "What makes a function 'pure'?"
+    options:
+      - "It uses only built-in JavaScript methods"
+      - "It always returns the same output for the same input and has no side effects"
+      - "It is declared with the function keyword, not an arrow function"
+    correct: 1
+    explanation: "A pure function has two properties: (1) same inputs always produce the same output — it is deterministic, and (2) it has no side effects — it does not modify external state, make network calls, write to the console, or read from a database. Both properties must hold."
+  - question: "What is currying?"
+    options:
+      - "A way to call a function with all its arguments at once"
+      - "Transforming a function that takes multiple arguments into a sequence of functions each taking one argument"
+      - "Combining two functions into one"
+    correct: 1
+    explanation: "Currying transforms add(a, b) into add(a)(b). The key benefit is partial application: you can call add(1) and get back a new function that adds 1 to whatever it receives. fp-ts uses this pattern everywhere — O.map(f) returns a function waiting for its Option<A> argument."
+  - question: "What is the 'data last' convention in fp-ts?"
+    options:
+      - "The value being transformed is always the last argument of an fp-ts function, enabling partial application in pipe"
+      - "Data should only be processed at the end of the program"
+      - "Functions should return data, never modify it"
+    correct: 0
+    explanation: "fp-ts functions are designed so the value being operated on comes last. O.map(double) returns a function (Option<number>) => Option<number> — it captures the transformation but waits for the data. This is what makes pipe work: each step is a partially-applied function waiting for the data from the previous step."
+---
+
+Think of this lesson as the luggage you pack before a long trip. You could skip it and figure things out as you go — but ten minutes here will save you hours of confusion later. These are the ideas that fp-ts is built on.
+
+## Introduction
+
+fp-ts is a library that brings functional programming patterns to TypeScript. Before you can use it well, you need to be comfortable with a handful of ideas that are central to how it works. None of these are difficult — they are just unfamiliar if you have spent most of your time writing object-oriented or imperative code.
+
+This lesson covers five concepts: pure functions, immutability, higher-order functions, currying and partial application, and function composition. By the end, you will understand why fp-ts is designed the way it is — and the rest of the course will feel like natural extensions of these foundations rather than arbitrary magic.
+
+## Pure Functions
+
+A pure function is a function that:
+1. **Always returns the same output for the same input** — it is deterministic
+2. **Has no side effects** — it does not change anything outside itself
+
+```typescript
+// PURE — given the same inputs, always returns the same result
+// No external state touched, no network calls, nothing mutated
+const add = (a: number, b: number): number => a + b
+
+const greet = (name: string): string => `Hello, ${name}`
+
+const double = (xs: readonly number[]): readonly number[] => xs.map(x => x * 2)
+
+// IMPURE — these break at least one of the two rules
+
+// Rule 1 broken: returns different values for the same input
+const randomBetween = (min: number, max: number): number =>
+  Math.floor(Math.random() * (max - min + 1)) + min
+
+// Rule 2 broken: modifies external state (side effect)
+let total = 0
+const addToTotal = (n: number): void => { total += n }
+
+// Rule 2 broken: reads external state (can return different results)
+const getCurrentUser = (): string => localStorage.getItem('user') ?? 'guest'
+
+// Rule 2 broken: network call is a side effect
+const fetchUser = async (id: string) => fetch(`/api/users/${id}`)
+```
+
+**Why this matters for fp-ts:** fp-ts types like `Task`, `IO`, and `TaskEither` exist specifically to model side effects as values rather than actions. A `Task<User>` is a description of a network call — a pure value — rather than an impure function that fires immediately. This distinction is everything.
+
+### Pure functions are easy to test and reason about
+
+```typescript
+// Testing a pure function is trivial — no setup, no mocking
+const formatPrice = (cents: number, currency: string): string => {
+  const amount = (cents / 100).toFixed(2)
+  return `${currency}${amount}`
+}
+
+// Test: no database, no network, no state
+console.log(formatPrice(1099, '$'))   // "$10.99" — always
+console.log(formatPrice(0, '€'))      // "€0.00" — always
+
+// Contrast: testing an impure function that hits a database requires
+// setting up test databases, mocking connections, cleaning up state...
+```
+
+## Immutability
+
+Immutable data does not change after it is created. Instead of modifying an object in place, you create a new object with the modification applied.
+
+```typescript
+// MUTABLE approach — modifies in place
+const user1 = { name: 'Alice', age: 30 }
+user1.age = 31  // The original object changed — anyone holding a reference sees this
+
+// IMMUTABLE approach — creates a new object, original untouched
+const user2 = { name: 'Alice', age: 30 }
+const olderUser2 = { ...user2, age: 31 }
+// user2 is still { name: 'Alice', age: 30 }
+// olderUser2 is { name: 'Alice', age: 31 }
+
+// Arrays: immutable equivalents of common mutations
+const nums = [1, 2, 3]
+
+// Instead of push:
+const withFour = [...nums, 4]          // [1, 2, 3, 4]
+
+// Instead of splice/filter:
+const withoutTwo = nums.filter(n => n !== 2)  // [1, 3]
+
+// Instead of sort (which mutates):
+const sorted = [...nums].sort((a, b) => b - a)  // [3, 2, 1]
+```
+
+fp-ts types are immutable by design. An `Option<number>` cannot become a different `Option<number>` — if you want to change it, you get a new `Option<number>` back. This makes code predictable: values passed into functions are guaranteed to come out unchanged.
+
+## Higher-Order Functions
+
+A higher-order function is a function that either:
+- **Takes another function as an argument**, or
+- **Returns a function as its result** (or both)
+
+You already use these every day:
+
+```typescript
+// Array.map takes a function — it is a higher-order function
+const doubled = [1, 2, 3].map(n => n * 2)   // [2, 4, 6]
+
+// Array.filter takes a function
+const evens = [1, 2, 3, 4].filter(n => n % 2 === 0)  // [2, 4]
+
+// A function that RETURNS a function
+const multiplier = (factor: number) => (n: number) => n * factor
+
+const triple = multiplier(3)     // Returns (n: number) => n * 3
+console.log(triple(5))           // 15
+console.log(triple(10))          // 30
+
+// The returned function can be used anywhere a (number => number) is expected
+const tripled = [1, 2, 3].map(triple)  // [3, 6, 9]
+```
+
+fp-ts is deeply built on higher-order functions. `O.map`, `E.chain`, `A.filter` — all take functions as arguments. Understanding that functions are just values that can be passed around and returned is the key mental shift.
+
+## Currying and Partial Application
+
+**Currying** is transforming a multi-argument function into a chain of single-argument functions. **Partial application** is calling a curried function with fewer arguments than it needs, getting back a new function waiting for the rest.
+
+```typescript
+// Regular (uncurried) function — all arguments at once
+const add = (a: number, b: number): number => a + b
+add(2, 3)  // 5
+
+// Curried version — one argument at a time
+const curriedAdd = (a: number) => (b: number): number => a + b
+curriedAdd(2)(3)  // 5
+
+// PARTIAL APPLICATION: call with just the first argument
+const add2 = curriedAdd(2)  // Returns (b: number) => number
+add2(3)   // 5
+add2(10)  // 12
+add2(0)   // 2
+
+// This is useful anywhere you have a fixed "left side" and a varying "right side"
+const prices = [100, 250, 75, 400]
+const addTax = curriedAdd(10)  // always adds 10
+const withTax = prices.map(addTax)  // [110, 260, 85, 410]
+```
+
+### The "data last" convention — why fp-ts functions work with pipe
+
+Every fp-ts function is designed so the **value being transformed comes last**. This is not arbitrary — it is what makes `pipe` work:
+
+```typescript
+import * as O from 'fp-ts/Option'
+
+// O.map takes the transformation first, data second
+// O.map(f) returns a FUNCTION: (Option<A>) => Option<B>
+// That returned function is what you put in a pipe step
+
+const double = (n: number) => n * 2
+
+// Partially applied — waiting for the Option<number> data
+const doubleOption = O.map(double)
+// Type: (fa: Option<number>) => Option<number>
+
+// Full call — with data
+const result = doubleOption(O.some(5))  // O.some(10)
+
+// In practice, you write this inline in pipe:
+import { pipe } from 'fp-ts/function'
+
+const result2 = pipe(
+  O.some(5),
+  O.map(double),         // partial application — data comes from pipe
+  O.map(n => n + 1),     // another partial application
+  O.getOrElse(() => 0)   // partial application
+)
+// result2 = 11
+```
+
+If you understand this one pattern — data last enables partial application enables pipe — you understand 80% of how fp-ts is designed.
+
+## Function Composition
+
+Function composition is building a new function by chaining two or more existing functions, where the output of one feeds into the input of the next.
+
+```typescript
+// Manual composition
+const trim = (s: string) => s.trim()
+const toLowerCase = (s: string) => s.toLowerCase()
+const removeSpaces = (s: string) => s.replace(/\s+/g, '-')
+
+// Without composition — nested calls, reads right-to-left
+const slugify1 = (s: string) => removeSpaces(toLowerCase(trim(s)))
+
+// With flow from fp-ts — left-to-right, reads as a sequence
+import { flow, pipe } from 'fp-ts/function'
+
+const slugify2 = flow(trim, toLowerCase, removeSpaces)
+// Same as above, but reads: "first trim, then lowercase, then remove spaces"
+
+slugify2('  Hello World  ')  // "hello-world"
+
+// pipe is composition with the data supplied immediately
+const result = pipe('  Hello World  ', trim, toLowerCase, removeSpaces)
+// "hello-world"
+```
+
+The difference between `pipe` and `flow` is just timing:
+- `pipe(value, f, g)` — you have the value now, apply `f` then `g` immediately
+- `flow(f, g)` — you are describing a reusable transformation, data will be supplied later
+
+Both are just function composition. Day 1 covers this in depth.
+
+## A Conceptual Tour of fp-ts Types
+
+You do not need to understand these deeply yet — that is what the next 15 days are for. But knowing what problem each type solves will help you orient yourself.
+
+| Type | Plain language meaning | Replaces |
+|------|----------------------|----------|
+| `Option<A>` | A value that might or might not be there | `null` / `undefined` |
+| `Either<E, A>` | A result that is either an error (Left) or a success (Right) | `throw` / `try/catch` |
+| `Task<A>` | An async computation that always succeeds | `Promise<A>` |
+| `TaskEither<E, A>` | An async computation that might fail | `Promise<A>` with error handling |
+| `IO<A>` | A synchronous side effect wrapped as a pure value | Side-effecting functions |
+| `IOEither<E, A>` | A synchronous side effect that might fail | Fallible sync operations |
+| `ReaderTaskEither<R, E, A>` | An async computation with dependency injection and error handling | Full service layer pattern |
+
+The pattern is consistent: instead of performing an effect immediately, you create a **description** of the effect as a value. You compose these descriptions using `pipe`, then run the whole pipeline at the edge of your application.
+
+## When to Use / When NOT to Use fp-ts
+
+### Use fp-ts when:
+- You want to model missing values, errors, or async operations as typed values that compose
+- You are building data transformation pipelines (parsing, normalizing, validating)
+- You want to eliminate runtime null/undefined errors through the type system
+- Your team values predictability and testability over imperative brevity
+
+### Do NOT use fp-ts when:
+- The code is simple and already readable without it — `fp-ts` adds indirection; use it where that trade-off pays off
+- Your team is unfamiliar with it and you cannot invest in onboarding — fp-ts is a significant mental model shift; forcing it on reluctant teams creates maintenance problems
+- You only need `map`/`filter`/`reduce` on arrays — the standard library handles those fine
+- You are writing a quick script or prototype — the overhead is not worth it at small scale
+
+## Key Takeaways
+
+- **Pure functions** always return the same output for the same input and have no side effects — they are the building blocks fp-ts is designed around
+- **Immutability** means you never modify data in place; you create new values — all fp-ts types are immutable
+- **Currying** transforms multi-argument functions into chains of single-argument functions; **partial application** is calling a curried function with fewer args than it needs
+- **Data last** is the convention fp-ts uses so that `O.map(f)`, `E.chain(g)` etc. return partially-applied functions that slot into `pipe` steps
+- **Function composition** is the core activity in fp-ts — you build pipelines from small, pure, reusable pieces and run the whole thing at the application boundary

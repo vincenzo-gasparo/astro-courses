@@ -1,34 +1,277 @@
 ---
-title: "Introduction to fp-ts and Functional Programming"
+title: "pipe and flow: The Backbone of fp-ts Pipelines"
 day: 1
-description: "Get started with fp-ts by understanding its core philosophy and the advantages of typed functional programming in TypeScript."
+description: "Master pipe and flow — the two utilities that make every fp-ts pattern readable and composable. These functions appear in nearly every line of fp-ts code."
 quiz:
-  - question: "What does pipe() do?"
+  - question: "What is the key difference between pipe and flow?"
     options:
-      - "Composes functions left-to-right"
-      - "Composes functions right-to-left"
-      - "Creates an Option"
+      - "pipe takes a value as its first argument and applies functions left-to-right; flow returns a new composed function"
+      - "flow takes a value as its first argument; pipe returns a new function"
+      - "They are identical — pipe and flow are just aliases"
     correct: 0
-    explanation: "pipe(value, f, g) applies f then g — left to right."
+    explanation: "pipe(value, f, g) immediately applies f then g to the value and returns the result. flow(f, g) creates a new reusable function that accepts a value and applies f then g — it is lazy."
+  - question: "When should you prefer flow over pipe?"
+    options:
+      - "When you already have the value ready and want to transform it immediately"
+      - "When you want to define a reusable transformation that will be passed around or called multiple times"
+      - "When you need to access intermediate values between transformation steps"
+    correct: 1
+    explanation: "flow is ideal when you are defining a named transformation function — e.g., const normalizeUser = flow(trim, toLowerCase, sanitize). If you have the value in hand right now, use pipe."
+  - question: "Which of the following is an anti-pattern when using pipe?"
+    options:
+      - "Chaining 5-6 transformation steps in a single pipe"
+      - "Nesting one pipe call inside another pipe step"
+      - "Using pipe with Option.map and Option.getOrElse"
+    correct: 1
+    explanation: "Nesting pipe inside pipe creates unnecessary cognitive overhead. If you find yourself writing pipe(x, a => pipe(a, f, g), h), flatten it: pipe(x, f, g, h). The whole point of pipe is a flat, readable sequence."
 ---
 
-## What is fp-ts?
+## Introduction
 
-fp-ts is a library for typed functional programming in TypeScript. It brings algebraic data types, type classes, and a rich ecosystem of utilities to the TypeScript ecosystem.
+Every fp-ts codebase is built on two utilities from the `fp-ts/function` module: `pipe` and `flow`. If you have worked with fp-ts for more than five minutes, you have already seen `pipe`. Understanding these two functions deeply — not just knowing the syntax, but grasping when and why to reach for each — is the foundation everything else in this course builds on.
 
-## Your first fp-ts code
+Before fp-ts, TypeScript developers handled data transformations in one of three ways: nested function calls (`h(g(f(x)))`), intermediate variables (`const a = f(x); const b = g(a); const c = h(b)`), or method chaining (`.map().filter().reduce()`). Each approach has trade-offs. Nested calls read right-to-left (the opposite of how we think about sequences). Intermediate variables are verbose and pollute scope with single-use names. Method chaining works beautifully for arrays but is unavailable for custom types like `Option` or `Either`.
+
+`pipe` solves all of these problems by providing a universal left-to-right composition operator that works with any value and any function — no method chaining API required.
+
+## Core API
+
+### pipe — immediate left-to-right application
+
+```typescript
+import { pipe } from 'fp-ts/function'
+
+// Signature (simplified): pipe(value, f1, f2, f3, ...) => result
+// Equivalent to: f3(f2(f1(value)))
+
+const result = pipe(
+  5,                        // start with 5
+  (n) => n * 2,            // 10
+  (n) => n + 1,            // 11
+  (n) => `Result: ${n}`   // "Result: 11"
+)
+
+console.log(result) // "Result: 11"
+```
+
+The key property: each function receives the output of the previous step as its argument. The final value is returned immediately — `pipe` is eager.
+
+### A realistic 6-step pipe chain
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as O from 'fp-ts/Option'
+import * as S from 'fp-ts/string'
+
+interface ApiUser {
+  name?: string | null
+  email: string
+}
+
+const normalizeDisplayName = (user: ApiUser): string =>
+  pipe(
+    user.name,                                     // string | null | undefined
+    O.fromNullable,                                // Option<string>
+    O.map(S.trim),                                 // Option<string> — trimmed
+    O.map((s) => s.toLowerCase()),                 // Option<string> — lower
+    O.filter((s) => s.length > 0),                 // Option<string> — non-empty
+    O.getOrElse(() => user.email.split('@')[0])    // string — fallback to email prefix
+  )
+
+console.log(normalizeDisplayName({ name: '  Alice  ', email: 'alice@example.com' }))
+// "alice"
+
+console.log(normalizeDisplayName({ name: null, email: 'bob@example.com' }))
+// "bob"
+```
+
+Notice how this reads as a sentence: "take the name, make it optional, trim it, lowercase it, remove empty strings, or fall back to the email prefix." No intermediate variables, no nested ternaries.
+
+### flow — creating a reusable composed function
+
+```typescript
+import { flow } from 'fp-ts/function'
+
+// flow(f, g, h) creates a NEW function: (a) => h(g(f(a)))
+// Nothing runs until you call the result
+
+const double = (n: number) => n * 2
+const addOne = (n: number) => n + 1
+const toLabel = (n: number) => `Score: ${n}`
+
+// Define the transformation once
+const computeScore = flow(double, addOne, toLabel)
+
+// Reuse it anywhere
+console.log(computeScore(5))   // "Score: 11"
+console.log(computeScore(10))  // "Score: 21"
+console.log(computeScore(0))   // "Score: 1"
+
+// Great for array transforms — same composed function applied to each element
+const scores = [3, 7, 12].map(computeScore)
+// ["Score: 7", "Score: 15", "Score: 25"]
+```
+
+### The "data last" convention
+
+fp-ts functions are designed with the data last convention: the value being transformed is always the last argument. This is what makes `pipe` work — each fp-ts function returns a new function waiting for its data, and `pipe` supplies that data step by step.
 
 ```typescript
 import { pipe } from 'fp-ts/function'
 import * as O from 'fp-ts/Option'
 
-const result = pipe(
-  O.some(42),
-  O.map(n => n * 2),
-  O.getOrElse(() => 0)
-)
+// O.map is curried: O.map(f) returns a function (Option<A>) => Option<B>
+// This is what lets you write O.map(fn) as a pipe step
 
-console.log(result) // 84
+const double = (n: number) => n * 2
+
+// "data last" means you write the transformation, not the data
+const doubleOption = O.map(double)  // (Option<number>) => Option<number>
+
+// Then pipe supplies the data
+const result = pipe(O.some(5), doubleOption)  // O.some(10)
+
+// More commonly written inline:
+const result2 = pipe(O.some(5), O.map(double))  // O.some(10)
 ```
 
-This pattern — `pipe` + `Option.map` + `Option.getOrElse` — is the core idiom you will use throughout the course.
+## When to Use / When NOT to Use
+
+### Use pipe when:
+- You have a value in hand and want to apply a sequence of transformations to it
+- You need to chain more than 2 operations (anything more than 2 becomes cleaner with pipe)
+- You are working with fp-ts types like Option, Either, Task, or Array
+- You want readable code that a colleague can follow top-to-bottom
+
+### Use flow when:
+- You are defining a named, reusable transformation function
+- You want to pass a composed function as a callback (e.g., to `.map()`, to a higher-order function)
+- You are building up a function from smaller pieces using point-free style
+- The value you are transforming is not known yet — it will be supplied by a caller
+
+### Do NOT use pipe when:
+**Anti-pattern 1: Nesting pipe inside pipe.** This is the most common mistake. If you see this, flatten it.
+
+```typescript
+// BAD — nested pipe is harder to read
+const result = pipe(
+  someValue,
+  (x) => pipe(x, transform1, transform2),  // <-- inner pipe is smell
+  finalStep
+)
+
+// GOOD — flat pipe
+const result = pipe(
+  someValue,
+  transform1,
+  transform2,
+  finalStep
+)
+```
+
+**Anti-pattern 2: Using flow when you need intermediate values for debugging.** `flow` is opaque — you cannot easily insert a `console.log` between steps. Temporarily switch to `pipe` while debugging so you can inspect intermediate values.
+
+```typescript
+// During debugging, prefer pipe so you can inspect
+const result = pipe(
+  inputValue,
+  step1,
+  (intermediate) => { console.log('after step1:', intermediate); return intermediate },
+  step2,
+  step3
+)
+```
+
+**Anti-pattern 3: Using pipe for single-argument calls.** If you only have one transformation, just call the function directly. `pipe(x, f)` is equivalent to `f(x)` — the latter is simpler.
+
+## Real-World Example
+
+Here is a realistic data normalization scenario: you are receiving a user object from an external API and need to normalize it before storing it in your application.
+
+```typescript
+import { pipe, flow } from 'fp-ts/function'
+import * as O from 'fp-ts/Option'
+import * as A from 'fp-ts/ReadonlyArray'
+
+interface RawApiUser {
+  id: string
+  first_name?: string | null
+  last_name?: string | null
+  email: string
+  role?: string
+  tags?: string[]
+}
+
+interface NormalizedUser {
+  id: string
+  displayName: string
+  email: string
+  role: 'admin' | 'member' | 'guest'
+  tags: ReadonlyArray<string>
+}
+
+// flow is perfect for small, reusable helpers
+const trim = (s: string) => s.trim()
+const toLowerCase = (s: string) => s.toLowerCase()
+
+const normalizeRole = (role: string | undefined): 'admin' | 'member' | 'guest' =>
+  pipe(
+    role,
+    O.fromNullable,
+    O.map(toLowerCase),
+    O.filter((r): r is 'admin' | 'member' => r === 'admin' || r === 'member'),
+    O.getOrElse((): 'admin' | 'member' | 'guest' => 'guest')
+  )
+
+const buildDisplayName = (first: string | null | undefined, last: string | null | undefined): string =>
+  pipe(
+    [first, last],
+    A.filterMap(O.fromNullable),
+    A.map(trim),
+    A.filter((s) => s.length > 0),
+    (parts) => parts.join(' ') || 'Anonymous'
+  )
+
+// The main normalization pipeline
+const normalizeUser = (raw: RawApiUser): NormalizedUser => ({
+  id: raw.id,
+  displayName: buildDisplayName(raw.first_name, raw.last_name),
+  email: pipe(raw.email, trim, toLowerCase),
+  role: normalizeRole(raw.role),
+  tags: pipe(
+    raw.tags ?? [],
+    A.map(flow(trim, toLowerCase)),
+    A.filter((t) => t.length > 0),
+    A.uniq({ equals: (a, b) => a === b })
+  ),
+})
+
+// Usage
+const raw: RawApiUser = {
+  id: '123',
+  first_name: '  Alice ',
+  last_name: null,
+  email: 'Alice@EXAMPLE.COM',
+  role: 'admin',
+  tags: ['typescript', ' fp-ts ', 'TypeScript'],
+}
+
+const normalized = normalizeUser(raw)
+// {
+//   id: '123',
+//   displayName: 'Alice',
+//   email: 'alice@example.com',
+//   role: 'admin',
+//   tags: ['typescript', 'fp-ts']
+// }
+```
+
+Notice how `pipe` makes each field transformation a readable sequence, and `flow` composes `trim` and `toLowerCase` into a single step for the tags array. The code reads like a specification rather than an imperative set of instructions.
+
+## Key Takeaways
+
+- **`pipe(value, f, g, h)`** applies functions left-to-right and returns the final result immediately — use it when you have a value ready to transform
+- **`flow(f, g, h)`** creates a new function that applies f, g, h in sequence — use it when defining reusable transformations or point-free callbacks
+- **Data last convention** is why fp-ts functions work as pipe steps — each function is curried so `O.map(f)` returns a function waiting for its `Option<A>` argument
+- **Never nest pipe inside pipe** — always flatten into a single pipe chain
+- Both `pipe` and `flow` are pure TypeScript with full type inference — no magic, just function application

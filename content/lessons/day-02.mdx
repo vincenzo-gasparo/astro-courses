@@ -1,29 +1,265 @@
 ---
-title: "Option: Handling Nullable Values"
+title: "Option: Eliminating Null with Types"
 day: 2
-description: "Learn how fp-ts Option eliminates null and undefined errors by making the absence of a value explicit in the type system."
+description: "Learn how fp-ts Option replaces null and undefined with an explicit, composable type that forces you to handle the missing-value case — no more unexpected null dereferences."
+quiz:
+  - question: "Which function should you use to convert a potentially null value into an Option?"
+    options:
+      - "O.some"
+      - "O.fromNullable"
+      - "O.of"
+    correct: 1
+    explanation: "O.fromNullable(value) returns O.none when value is null or undefined, and O.some(value) otherwise. O.some always wraps the value even if it is null — use fromNullable at the boundary where nulls enter your fp-ts code."
+  - question: "What is the correct way to provide a fallback value when an Option is None?"
+    options:
+      - "O.getOrElse(() => defaultValue)"
+      - "O.chain(() => O.some(defaultValue))"
+      - "O.map(() => defaultValue)"
+    correct: 0
+    explanation: "O.getOrElse accepts a thunk (a zero-argument function) that returns the default value. The thunk is only called when the Option is None. O.map applies a function to the inner value but leaves None as None — it does not handle the missing case."
+  - question: "When should you use Either instead of Option?"
+    options:
+      - "When the computation is asynchronous"
+      - "When you need to communicate WHY a value is missing, not just that it is absent"
+      - "When you need to wrap a value that is definitely present"
+    correct: 1
+    explanation: "Option models presence vs absence, but provides no information about the cause of absence. When callers need to know WHY something is missing (e.g., 'not found' vs 'insufficient permissions' vs 'parse error'), use Either<ErrorType, A> — the Left carries the reason."
 ---
 
-## The Problem with null
+## Introduction
 
-In TypeScript, accessing a nullable value without checking leads to runtime errors. Option solves this by making the absence of a value part of the type.
+In TypeScript, `null` and `undefined` are the source of a disproportionate number of production bugs. The infamous null pointer exception — Tony Hoare's "billion-dollar mistake" — manifests in TypeScript as `Cannot read property 'x' of null` or `Cannot read property 'y' of undefined`. TypeScript's `strictNullChecks` flag forces you to acknowledge the possibility of null, but it does not give you tools to work with nullable values elegantly.
 
-## Working with Option
+`Option<A>` is fp-ts's solution. It is a type that represents either the presence of a value (`Some<A>`) or the absence of one (`None`). This sounds simple — and it is — but the power comes from two properties that null/undefined lack entirely: Option is a Functor (you can `map` over it), and it integrates seamlessly with `pipe`. These two properties transform the tedious pattern of null-checking before every operation into clean, readable chains.
+
+The Option type comes from ML, Haskell (where it is called `Maybe`), and Scala (where it is also called `Option`). It has been battle-tested for decades in functional languages. fp-ts brings it to TypeScript with full type safety and zero runtime overhead beyond a lightweight object wrapper.
+
+## Core API
+
+### Creating Options
+
+```typescript
+import * as O from 'fp-ts/Option'
+
+// O.some — wrap a value you know is present
+const present: O.Option<number> = O.some(42)
+
+// O.none — represent the absence of a value
+const absent: O.Option<number> = O.none
+
+// O.fromNullable — convert a potentially null/undefined value
+const fromNull = O.fromNullable(null)          // O.none
+const fromUndef = O.fromNullable(undefined)    // O.none
+const fromValue = O.fromNullable(42)           // O.some(42)
+
+// O.fromPredicate — create Some only if predicate is true
+const positiveOnly = O.fromPredicate((n: number) => n > 0)
+const valid = positiveOnly(5)    // O.some(5)
+const invalid = positiveOnly(-1) // O.none
+```
+
+### Transforming Options with map and chain
 
 ```typescript
 import { pipe } from 'fp-ts/function'
 import * as O from 'fp-ts/Option'
 
-const findUser = (id: number): O.Option<string> =>
-  id > 0 ? O.some(`User ${id}`) : O.none
-
-const result = pipe(
-  findUser(1),
-  O.map(name => name.toUpperCase()),
-  O.getOrElse(() => 'Anonymous')
+// O.map — apply a function to the inner value, skip if None
+const doubled = pipe(
+  O.some(5),
+  O.map((n) => n * 2)   // O.some(10)
 )
 
-console.log(result) // "USER 1"
+const skipped = pipe(
+  O.none,
+  O.map((n: number) => n * 2)   // O.none — function never called
+)
+
+// O.chain (flatMap) — transform into another Option, avoid Option<Option<A>>
+interface User { address: Address | null }
+interface Address { city: string | null }
+
+const getCity = (user: User): O.Option<string> =>
+  pipe(
+    user.address,
+    O.fromNullable,                       // Option<Address>
+    O.chain((addr) => O.fromNullable(addr.city))  // Option<string>
+    // O.map here would give Option<Option<string>> — wrong!
+  )
+
+getCity({ address: { city: 'Berlin' } })   // O.some('Berlin')
+getCity({ address: { city: null } })       // O.none
+getCity({ address: null })                 // O.none
 ```
 
-By wrapping nullable values in Option, you are forced to handle the missing case explicitly before using the value.
+### Extracting values — fold, getOrElse, match
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as O from 'fp-ts/Option'
+
+// O.getOrElse — provide a fallback value
+const value = pipe(
+  O.none as O.Option<string>,
+  O.getOrElse(() => 'default')   // 'default'
+)
+
+// O.fold / O.match — handle both cases explicitly
+// fold(onNone, onSome)
+const message = pipe(
+  O.some(42),
+  O.fold(
+    () => 'No value found',
+    (n) => `Found: ${n}`
+  )
+)
+// 'Found: 42'
+
+// O.isSome / O.isNone — type guards when you need to branch
+const opt = O.some(5)
+if (O.isSome(opt)) {
+  console.log(opt.value)  // TypeScript knows opt.value: number here
+}
+```
+
+### Filtering Options
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as O from 'fp-ts/Option'
+
+// O.filter — keep Some only if predicate passes, otherwise None
+const onlyAdults = pipe(
+  O.some(17),
+  O.filter((age) => age >= 18)   // O.none — 17 < 18
+)
+
+const adult = pipe(
+  O.some(21),
+  O.filter((age) => age >= 18)   // O.some(21)
+)
+
+// O.filterMap — map and filter in one step
+const parsePositive = (s: string): O.Option<number> =>
+  pipe(
+    parseInt(s, 10),
+    O.fromPredicate((n) => !isNaN(n) && n > 0)
+  )
+```
+
+## When to Use / When NOT to Use
+
+### Use Option when:
+
+- A value may legitimately be absent and the absence is not an error — e.g., a user's optional middle name, an optional configuration field, a lookup that might return nothing
+- You are working with deeply nested nullable fields and want to traverse them safely without `?.` chains
+- You need the composability of `map`, `chain`, and `filter` over a potentially absent value
+- You are replacing a function that previously returned `null` or `undefined` for the "not found" case
+
+### Do NOT use Option when:
+
+**You need to explain WHY the value is absent.** Option is a binary type: present or absent. It carries no information about the cause of absence. If your function can fail for multiple distinguishable reasons — "not found", "unauthorized", "invalid format" — use `Either<ErrorType, A>` instead. The Left value carries the reason.
+
+```typescript
+// BAD: caller cannot distinguish between "not found" and "parse error"
+const findUser = (id: string): O.Option<User> => { ... }
+
+// GOOD: caller can handle each failure case explicitly
+type UserError = 'not-found' | 'invalid-id' | 'unauthorized'
+const findUser = (id: string): E.Either<UserError, User> => { ... }
+```
+
+**The value is always present.** Wrapping a value that is never actually absent adds indirection without benefit. If `userId` is always a number, `O.some(userId)` just makes callers call `O.getOrElse` everywhere for no reason.
+
+**You are wrapping every nullable field across an entire codebase.** Option is for boundaries — places where absence is meaningful and needs to be handled. Do not blindly convert all nullable TypeScript values to Option. Use it intentionally where the composability buys you something.
+
+## Real-World Example
+
+Here is a realistic scenario: looking up a user's theme preference from a settings object that may be partially populated (some users have not set preferences yet).
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as O from 'fp-ts/Option'
+
+interface UserSettings {
+  theme?: string | null
+  fontSize?: number | null
+  language?: string | null
+}
+
+interface User {
+  id: string
+  settings?: UserSettings | null
+}
+
+interface ResolvedPreferences {
+  theme: 'light' | 'dark' | 'system'
+  fontSize: number
+  language: string
+}
+
+const SUPPORTED_THEMES = ['light', 'dark', 'system'] as const
+type Theme = typeof SUPPORTED_THEMES[number]
+
+const isValidTheme = (s: string): s is Theme =>
+  (SUPPORTED_THEMES as readonly string[]).includes(s)
+
+const resolvePreferences = (user: User): ResolvedPreferences => ({
+  theme: pipe(
+    user.settings,
+    O.fromNullable,
+    O.chain((s) => O.fromNullable(s.theme)),
+    O.map((t) => t.toLowerCase()),
+    O.filter(isValidTheme),
+    O.getOrElse((): Theme => 'system')
+  ),
+
+  fontSize: pipe(
+    user.settings,
+    O.fromNullable,
+    O.chain((s) => O.fromNullable(s.fontSize)),
+    O.filter((n) => n >= 10 && n <= 32),
+    O.getOrElse(() => 16)
+  ),
+
+  language: pipe(
+    user.settings,
+    O.fromNullable,
+    O.chain((s) => O.fromNullable(s.language)),
+    O.map((l) => l.trim()),
+    O.filter((l) => l.length > 0),
+    O.getOrElse(() => 'en')
+  ),
+})
+
+// User with some settings
+const userA: User = {
+  id: '1',
+  settings: { theme: 'dark', fontSize: 18, language: null },
+}
+resolvePreferences(userA)
+// { theme: 'dark', fontSize: 18, language: 'en' }
+
+// User with no settings at all
+const userB: User = { id: '2', settings: null }
+resolvePreferences(userB)
+// { theme: 'system', fontSize: 16, language: 'en' }
+
+// User with invalid theme
+const userC: User = {
+  id: '3',
+  settings: { theme: 'blue', fontSize: 99, language: 'fr' },
+}
+resolvePreferences(userC)
+// { theme: 'system', fontSize: 16, language: 'fr' }
+```
+
+Each preference field follows the same pattern: extract from potentially-null settings, validate, fall back to default. The Option chain makes each step explicit and composable. Compare this to an imperative version with nested null checks and ternaries — the Option version has less branching and is easier to add a new validation rule to.
+
+## Key Takeaways
+
+- **`O.fromNullable`** is your entry point — use it at the boundary where null/undefined values enter your fp-ts pipeline; `O.some` is for values you know are present
+- **`O.map`** transforms the inner value without unwrapping; **`O.chain`** is for transformations that themselves return an `Option` (avoids `Option<Option<A>>`)
+- **`O.getOrElse`** and **`O.fold`** are your exit points — use them to convert back to plain TypeScript values at the end of a pipeline
+- **Option encodes absence, not error reason** — if callers need to know WHY something is missing, use `Either` instead
+- Option eliminates null checks by making the absent case structurally explicit — the type system enforces that you handle it before using the value

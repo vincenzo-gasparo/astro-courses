@@ -1,34 +1,305 @@
 ---
-title: "Either: Typed Error Handling"
+title: "Either: Typed Error Handling Without try/catch"
 day: 3
-description: "Use Either to represent computations that can fail with a typed error, replacing try/catch with composable, type-safe error handling."
+description: "Use Either to represent computations that can fail with a meaningful typed error. Either is Option with context — the Left value tells you what went wrong."
+quiz:
+  - question: "In fp-ts Either, which side represents success and which represents failure?"
+    options:
+      - "Left is success, Right is failure — like 'left-hand side' of an assignment"
+      - "Right is success, Left is failure — 'right' as in correct"
+      - "Either side can be success or failure — it depends on the implementation"
+    correct: 1
+    explanation: "By convention, Right is the happy path (success) and Left is the error path. The mnemonic: 'right' means correct. fp-ts functions like E.map and E.chain operate on the Right value and pass Left values through unchanged."
+  - question: "Which function should you use to safely wrap a computation that might throw an exception?"
+    options:
+      - "E.right with a try/catch block"
+      - "E.tryCatch(computation, errorHandler)"
+      - "E.fromNullable"
+    correct: 1
+    explanation: "E.tryCatch(thunk, onThrow) executes the thunk and returns E.right(result) if it succeeds, or E.left(onThrow(thrownError)) if it throws. This is the standard bridge from exception-throwing code to Either."
+  - question: "What happens to E.map when applied to a Left value?"
+    options:
+      - "It applies the mapping function to the Left value"
+      - "It throws an error because Left has no mappable value"
+      - "It passes the Left through unchanged — the mapping function is never called"
+    correct: 2
+    explanation: "E.map only transforms the Right value. When the Either is Left, map is a no-op — the Left error value is threaded through unchanged. This is the 'railway' model: errors stay on the error track, successes stay on the success track."
 ---
 
-## Why Either?
+## Introduction
 
-Either represents a value that can be one of two types: a Left (usually an error) or a Right (the success value). This makes error handling explicit and composable.
+`Either<E, A>` is the logical evolution of `Option<A>`. Where Option answers "is a value present?", Either answers "did this computation succeed, and if not, why?". Every real application needs to communicate errors — parse failures, validation rejections, not-found results, permission denials — and Either gives you a type-safe, composable way to do that.
 
-## Using Either for validation
+The traditional TypeScript approach to error handling is `try/catch`. This works for exceptional cases (truly unexpected errors like network failures), but it has significant limitations when used for business logic errors. First, the type of the thrown value is `unknown` — TypeScript cannot tell you what kind of error to expect. Second, `try/catch` cannot be composed: you cannot chain multiple fallible operations without deeply nested try/catch blocks. Third, the error-handling code is structurally separated from the success code, making it harder to reason about what happens in each scenario.
+
+Either solves all of these. `Either<E, A>` is a union of `Left<E>` (failure with a typed error value) and `Right<A>` (success with a typed result). The error type `E` is part of the function's signature — callers can see what errors to expect just by reading the type. And because Either is a Functor and Monad, you can chain multiple fallible operations using `map` and `chain`, with errors short-circuiting through the chain automatically.
+
+This pattern is called "railway-oriented programming" — your data travels on two tracks: the success (right) track and the error (left) track. Operations on the success track proceed normally. Any operation that fails switches the data to the error track, and subsequent operations skip execution, passing the error through until you handle it.
+
+## Core API
+
+### Creating Either values
+
+```typescript
+import * as E from 'fp-ts/Either'
+
+// E.right — wrap a successful result
+const success: E.Either<string, number> = E.right(42)
+
+// E.left — represent a failure with a reason
+const failure: E.Either<string, number> = E.left('Not a valid number')
+
+// E.fromNullable — convert null/undefined to Left
+const fromNull = E.fromNullable('Value was null')(null)        // E.left('Value was null')
+const fromValue = E.fromNullable('Value was null')(42)         // E.right(42)
+
+// E.tryCatch — bridge from throwing code to Either
+const parseJson = (s: string): E.Either<Error, unknown> =>
+  E.tryCatch(
+    () => JSON.parse(s),
+    (e) => e instanceof Error ? e : new Error(String(e))
+  )
+
+parseJson('{"name":"Alice"}')   // E.right({ name: 'Alice' })
+parseJson('not valid json')     // E.left(Error: Unexpected token...)
+```
+
+### Transforming with map, mapLeft, chain
 
 ```typescript
 import { pipe } from 'fp-ts/function'
 import * as E from 'fp-ts/Either'
 
-const parseAge = (s: string): E.Either<string, number> => {
-  const n = parseInt(s, 10)
-  return isNaN(n) ? E.left('Not a number') : n < 0 ? E.left('Age must be positive') : E.right(n)
-}
-
-const result = pipe(
-  parseAge('25'),
-  E.map(age => age + 1),
-  E.fold(
-    err => `Error: ${err}`,
-    age => `Next year you will be ${age}`
-  )
+// E.map — transform the Right value; Left passes through
+const doubled = pipe(
+  E.right(5),
+  E.map((n) => n * 2)   // E.right(10)
 )
 
-console.log(result) // "Next year you will be 26"
+const unchanged = pipe(
+  E.left('error') as E.Either<string, number>,
+  E.map((n) => n * 2)   // E.left('error') — map skipped
+)
+
+// E.mapLeft — transform the Left (error) value; Right passes through
+const normalized = pipe(
+  E.left('NETWORK_ERROR') as E.Either<string, number>,
+  E.mapLeft((code) => `Error: ${code}`)   // E.left('Error: NETWORK_ERROR')
+)
+
+// E.chain (flatMap) — sequence fallible operations
+const parseAndValidate = (s: string): E.Either<string, number> =>
+  pipe(
+    E.tryCatch(
+      () => parseInt(s, 10),
+      () => 'Parse failed'
+    ),
+    E.chain((n) => isNaN(n) ? E.left('Not a number') : E.right(n)),
+    E.chain((n) => n >= 0 ? E.right(n) : E.left('Must be non-negative'))
+  )
+
+parseAndValidate('42')   // E.right(42)
+parseAndValidate('-5')   // E.left('Must be non-negative')
+parseAndValidate('abc')  // E.left('Not a number')
 ```
 
-Either lets you chain operations that may fail without nested try/catch blocks.
+### Handling both cases — fold and getOrElse
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as E from 'fp-ts/Either'
+
+// E.fold — handle Left and Right with separate functions
+const result = pipe(
+  E.right(42) as E.Either<string, number>,
+  E.fold(
+    (err) => `Failed: ${err}`,
+    (n)   => `Success: ${n}`
+  )
+)
+// 'Success: 42'
+
+// E.getOrElse — extract Right value or compute a fallback from Left
+const value = pipe(
+  E.left('error') as E.Either<string, number>,
+  E.getOrElse((err) => {
+    console.warn('Handled error:', err)
+    return 0   // fallback value
+  })
+)
+// 0
+
+// E.isRight / E.isLeft — type guards for branching
+const either = E.right(42) as E.Either<string, number>
+if (E.isRight(either)) {
+  console.log(either.right)  // TypeScript knows: either.right: number
+}
+```
+
+### The error channel threading through a pipeline
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as E from 'fp-ts/Either'
+
+type ValidationError = 'empty-name' | 'invalid-email' | 'age-out-of-range'
+
+const validateName = (name: string): E.Either<ValidationError, string> =>
+  name.trim().length > 0 ? E.right(name.trim()) : E.left('empty-name')
+
+const validateEmail = (email: string): E.Either<ValidationError, string> =>
+  email.includes('@') ? E.right(email) : E.left('invalid-email')
+
+const validateAge = (age: number): E.Either<ValidationError, number> =>
+  age >= 18 && age <= 120 ? E.right(age) : E.left('age-out-of-range')
+
+// Chain them — first failure short-circuits the rest
+const validateUser = (name: string, email: string, age: number) =>
+  pipe(
+    validateName(name),
+    E.chain((validName) =>
+      pipe(
+        validateEmail(email),
+        E.map((validEmail) => ({ name: validName, email: validEmail }))
+      )
+    ),
+    E.chain(({ name, email }) =>
+      pipe(
+        validateAge(age),
+        E.map((validAge) => ({ name, email, age: validAge }))
+      )
+    )
+  )
+
+validateUser('Alice', 'alice@example.com', 30)
+// E.right({ name: 'Alice', email: 'alice@example.com', age: 30 })
+
+validateUser('', 'alice@example.com', 30)
+// E.left('empty-name') — stops here, email and age not checked
+```
+
+## When to Use / When NOT to Use
+
+### Use Either when:
+
+- A computation can fail, and callers need to know HOW or WHY it failed
+- You are parsing external input (JSON, form data, URL params, environment variables)
+- You are performing validation with meaningful error messages
+- You are calling APIs or databases where different failure types need different handling
+- You want typed, composable error handling instead of try/catch
+
+### Do NOT use Either when:
+
+**You do not care about the error reason.** If all that matters is "present or absent" with no meaningful error to communicate, use `Option`. Using `Either<'not-found', A>` when the Left is always the same string is just a verbose Option.
+
+**Errors need to accumulate.** `Either`'s chain short-circuits on the first Left — if you need to collect ALL validation errors at once (e.g., show all form errors simultaneously instead of one at a time), use `These` or fp-ts's `Validation` pattern with `sequenceS` from the Apply module (covered in Day 6).
+
+**The operation is truly exceptional.** Not every `throw` should become an `Either`. Programmer errors (accessing an undefined index, calling a function with the wrong argument type) are not recoverable domain errors — they are bugs. Let those throw. `Either` is for expected failure modes in your domain.
+
+**You are wrapping library functions that always throw.** Use `E.tryCatch` as a thin bridge at the integration point, then work with Either inside your domain. Do not let `E.tryCatch` sprawl throughout your codebase.
+
+## Real-World Example
+
+Here is config file parsing — a realistic scenario where multiple things can go wrong at different stages, and each error needs a distinct, actionable message.
+
+```typescript
+import { pipe } from 'fp-ts/function'
+import * as E from 'fp-ts/Either'
+
+interface AppConfig {
+  port: number
+  databaseUrl: string
+  jwtSecret: string
+  maxConnections: number
+}
+
+type ConfigError =
+  | { kind: 'missing-field'; field: string }
+  | { kind: 'invalid-port'; value: string }
+  | { kind: 'invalid-connections'; value: string }
+  | { kind: 'parse-failure'; message: string }
+
+const getField = (obj: Record<string, unknown>, field: string): E.Either<ConfigError, string> => {
+  const value = obj[field]
+  if (typeof value !== 'string' || value.trim() === '') {
+    return E.left({ kind: 'missing-field', field })
+  }
+  return E.right(value.trim())
+}
+
+const parsePort = (raw: string): E.Either<ConfigError, number> => {
+  const port = parseInt(raw, 10)
+  if (isNaN(port) || port < 1 || port > 65535) {
+    return E.left({ kind: 'invalid-port', value: raw })
+  }
+  return E.right(port)
+}
+
+const parseConnections = (raw: string): E.Either<ConfigError, number> => {
+  const n = parseInt(raw, 10)
+  if (isNaN(n) || n < 1 || n > 100) {
+    return E.left({ kind: 'invalid-connections', value: raw })
+  }
+  return E.right(n)
+}
+
+const parseConfig = (raw: Record<string, unknown>): E.Either<ConfigError, AppConfig> =>
+  pipe(
+    getField(raw, 'PORT'),
+    E.chain(parsePort),
+    E.chain((port) =>
+      pipe(
+        getField(raw, 'DATABASE_URL'),
+        E.chain((databaseUrl) =>
+          pipe(
+            getField(raw, 'JWT_SECRET'),
+            E.chain((jwtSecret) =>
+              pipe(
+                getField(raw, 'MAX_CONNECTIONS'),
+                E.chain(parseConnections),
+                E.map((maxConnections) => ({ port, databaseUrl, jwtSecret, maxConnections }))
+              )
+            )
+          )
+        )
+      )
+    )
+  )
+
+// In your application startup:
+const config = parseConfig(process.env as Record<string, unknown>)
+
+const result = pipe(
+  config,
+  E.fold(
+    (err) => {
+      switch (err.kind) {
+        case 'missing-field':
+          console.error(`Missing required config: ${err.field}`)
+          break
+        case 'invalid-port':
+          console.error(`Invalid PORT value: "${err.value}" (must be 1-65535)`)
+          break
+        case 'invalid-connections':
+          console.error(`Invalid MAX_CONNECTIONS: "${err.value}" (must be 1-100)`)
+          break
+        case 'parse-failure':
+          console.error(`Config parse error: ${err.message}`)
+          break
+      }
+      process.exit(1)
+    },
+    (cfg) => cfg
+  )
+)
+```
+
+The discriminated union error type gives you exhaustive switch statements — TypeScript will warn you if you add a new `ConfigError` variant but forget to handle it. This is the gold standard of error handling: typed, exhaustive, composable.
+
+## Key Takeaways
+
+- **Right is success, Left is failure** — operations like `map` and `chain` work on Right and thread Left unchanged through the pipeline
+- **`E.tryCatch`** bridges exception-throwing code into Either — wrap external library calls at the boundary, not throughout your domain
+- **`E.chain`** sequences fallible operations — the first Left short-circuits and skips remaining steps
+- **Use Either over Option** when the error reason matters; use a discriminated union for the error type to get exhaustive pattern matching
+- **Either is not for exceptional bugs** — let programmer errors throw; Either is for expected domain failures (validation, not-found, unauthorized)

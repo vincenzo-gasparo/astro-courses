@@ -1,5 +1,6 @@
 import { defineConfig, s } from 'velite'
 import rehypePrettyCode from 'rehype-pretty-code'
+import rehypeSlug from 'rehype-slug'
 import { visit } from 'unist-util-visit'
 
 // Pass 1: extract raw text before Shiki transforms
@@ -60,6 +61,7 @@ export default defineConfig({
       extractRaw,
       [rehypePrettyCode, { theme: 'one-dark-pro' }],
       attachRaw,
+      rehypeSlug,
     ],
   },
 })

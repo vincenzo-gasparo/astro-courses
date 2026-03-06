@@ -38,12 +38,16 @@ Open [http://localhost:3000](http://localhost:3000).
 
 | Script | Description |
 |--------|-------------|
-| `pnpm dev:fp-ts` | Dev server for fp-ts-course |
+| `pnpm dev:fp-ts` | Dev server for fp-ts-course (port 3000) |
+| `pnpm dev:all` | Dev servers for all courses in parallel |
 | `pnpm build:all` | Production build for all courses |
-| `pnpm lint:all` | Lint all course apps |
-| `pnpm test:unit` | Run Vitest unit tests across all apps |
+| `pnpm test:all` | Unit tests + typecheck + lint across all apps |
+| `pnpm test:unit` | Vitest unit tests across all apps |
 | `pnpm typecheck` | TypeScript check across all apps and packages |
+| `pnpm lint:all` | ESLint across all apps |
 | `pnpm clean` | Remove all build artifacts (`.next`, `out`, `.velite`) |
+
+> Each course app uses a fixed port (`fp-ts-course` → 3000, next course → 3001, etc.) so `dev:all` can run them in parallel without conflicts.
 
 ### E2E tests (per course)
 

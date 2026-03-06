@@ -1,7 +1,7 @@
 import { lessons } from '.velite'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
-import { useMDXComponent, Pre, Quiz, MarkCompleteButton, TableOfContents } from '@courses/ui'
+import { getMDXComponent, Pre, Quiz, MarkCompleteButton, TableOfContents } from '@courses/ui'
 import courseConfig from '../../../../course.config'
 
 // REQUIRED for static export: every dynamic route must export generateStaticParams
@@ -32,7 +32,7 @@ export default async function LessonPage({ params }: { params: Promise<{ slug: s
   const lesson = sorted[idx]
   const prev = sorted[idx - 1] ?? null
   const next = sorted[idx + 1] ?? null
-  const MDXContent = useMDXComponent(lesson.body)
+  const MDXContent = getMDXComponent(lesson.body)
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-12">

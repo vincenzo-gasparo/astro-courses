@@ -12,7 +12,17 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Velite generated output
+    ".velite/**",
   ]),
+  {
+    // The Velite MDX pattern creates a component from a pre-compiled code
+    // string — it is not dynamic and does not reset state on re-render.
+    files: ["src/app/lessons/**/page.tsx"],
+    rules: {
+      "react-hooks/static-components": "off",
+    },
+  },
 ]);
 
 export default eslintConfig;

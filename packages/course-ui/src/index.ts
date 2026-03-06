@@ -20,6 +20,6 @@ export { Pre } from './components/mdx/pre'
 export { CopyButton } from './components/mdx/copy-button'
 
 // Lib
-export { useMDXComponent } from './lib/mdx'
+export { getMDXComponent } from './lib/mdx'
 export { loadProgress, saveProgress } from './lib/progress'
 export { cn } from './lib/utils'

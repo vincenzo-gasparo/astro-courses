@@ -1,36 +1,80 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# fp-ts Course
+
+A 15-day structured course for TypeScript developers who want to use [fp-ts](https://gcanti.github.io/fp-ts/) confidently in production codebases. Each day covers one concept with a written lesson, code examples, and an interactive quiz.
+
+## What You'll Learn
+
+| Day | Topic |
+|-----|-------|
+| 0 | Functional Programming Foundations |
+| 1 | `pipe` and `flow` — composition primitives |
+| 2 | `Option` — null-safe values |
+| 3 | `Either` — typed error handling |
+| 4 | `Task` — composable async |
+| 5 | `TaskEither` — async with typed errors |
+| 6 | `Apply` — parallel independent effects |
+| 7 | `ReadonlyArray` — functional array processing |
+| 8 | `NonEmptyArray` — compile-time non-emptiness |
+| 9 | `Record` — operations on string-keyed objects |
+| 10 | `Json` — safe JSON parsing |
+| 11 | `IOEither` — synchronous effects that can fail |
+| 12 | `ReaderIO` — dependency injection for sync effects |
+| 13 | `ReaderTaskEither` — DI + async + error handling |
+| 14 | Typeclasses — `Ord`, `Eq`, `Semigroup`, `Monoid` |
+| 15 | Real-World Integration — putting it all together |
+
+## Features
+
+- **Structured lessons** — every day has an introduction, Core API reference, When to Use / Not Use guidance, a real-world example, and key takeaways
+- **Interactive quizzes** — per-question answer locking with immediate correct/incorrect feedback
+- **Progress tracking** — mark days complete; progress is saved locally in the browser
+- **Table of contents** — sticky sidebar on desktop with active section highlight
+- **Dark mode** — system preference detected, manually toggleable
+- **Syntax highlighting** — code blocks with one-click copy
+
+## Tech Stack
+
+- [Next.js 15](https://nextjs.org) — App Router, static export
+- [Velite](https://velite.js.org) — MDX content pipeline
+- [Tailwind CSS v4](https://tailwindcss.com)
+- [rehype-pretty-code](https://rehype-pretty-code.netlify.app) + [Shiki](https://shiki.style) — syntax highlighting
+- [Playwright](https://playwright.dev) — E2E tests
+- [Vitest](https://vitest.dev) — unit tests
 
 ## Getting Started
 
-First, run the development server:
-
 ```bash
+npm install
 npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Open [http://localhost:3000](http://localhost:3000).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Project Structure
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```
+content/lessons/    # MDX lesson files (day-00.mdx … day-15.mdx)
+src/
+  app/              # Next.js App Router pages
+  components/       # React components (Quiz, MarkCompleteButton, TableOfContents, …)
+  lib/              # Utilities (MDX renderer, progress localStorage helpers)
+tests/              # Playwright E2E and Vitest unit tests
+```
 
-## Learn More
+## Running Tests
 
-To learn more about Next.js, take a look at the following resources:
+```bash
+# E2E tests (requires dev server running)
+npx playwright test
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+# Unit tests
+npx vitest
+```
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## Deployment
 
-## Deploy on Vercel
+The site builds as a fully static export and deploys automatically to GitHub Pages on every push to `main` via GitHub Actions.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run build   # outputs to /out
+```

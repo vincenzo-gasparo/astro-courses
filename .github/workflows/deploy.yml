@@ -32,6 +32,11 @@ jobs:
       - name: Install dependencies
         run: pnpm install
 
+      - name: Build home
+        run: pnpm --filter home build
+        env:
+          CI: true
+
       - name: Build fp-ts-course
         run: pnpm --filter fp-ts-course build
         env:
@@ -47,8 +52,9 @@ jobs:
       - name: Merge build outputs
         run: |
           mkdir -p deploy
-          cp -r apps/fp-ts-course/out deploy/fp-ts-course
-          cp -r apps/nextjs-course/out deploy/nextjs-course
+          cp -r apps/home/dist/. deploy/
+          cp -r apps/fp-ts-course/dist deploy/fp-ts-course
+          cp -r apps/nextjs-course/dist deploy/nextjs-course
 
       - uses: actions/upload-pages-artifact@v3
         with:

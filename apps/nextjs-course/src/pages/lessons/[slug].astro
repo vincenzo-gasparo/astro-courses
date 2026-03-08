@@ -1,0 +1,84 @@
+---
+import { getCollection, render } from 'astro:content'
+import Layout from '../../layouts/Layout.astro'
+import { MarkCompleteButton, TableOfContents, Quiz } from '@courses/ui'
+import courseConfig from '../../../course.config'
+
+export async function getStaticPaths() {
+  const lessons = await getCollection('lessons')
+  return lessons.map((lesson) => ({
+    params: { slug: lesson.slug },
+    props: { lesson },
+  }))
+}
+
+const { lesson } = Astro.props
+const allLessons = await getCollection('lessons')
+const sorted = allLessons.sort((a, b) => a.data.day - b.data.day)
+const idx = sorted.findIndex((l) => l.slug === lesson.slug)
+const prev = sorted[idx - 1] ?? null
+const next = sorted[idx + 1] ?? null
+
+const { Content } = await render(lesson)
+---
+
+<Layout
+  title={`Day ${lesson.data.day}: ${lesson.data.title} — ${courseConfig.title}`}
+  description={lesson.data.description}
+  courseTitle={courseConfig.title}
+  storageKey={courseConfig.storageKey}
+>
+  <div class="mx-auto max-w-6xl px-4 py-12">
+    <div class="flex gap-12">
+      <TableOfContents client:load />
+
+      <div class="min-w-0 flex-1">
+        <div class="mb-2 text-sm text-zinc-500">Day {lesson.data.day}</div>
+        <h1 class="mb-8 text-3xl font-bold">{lesson.data.title}</h1>
+
+        <article class="prose prose-zinc dark:prose-invert max-w-none">
+          <Content />
+        </article>
+
+        {
+          lesson.data.quiz && lesson.data.quiz.length > 0 && (
+            <Quiz items={lesson.data.quiz} client:load />
+          )
+        }
+
+        <div class="mt-8">
+          <MarkCompleteButton day={lesson.data.day} client:load />
+        </div>
+
+        <nav class="mt-12 flex justify-between border-t pt-6">
+          {
+            prev ? (
+              <a href={`/lessons/${prev.slug}`} class="flex flex-col">
+                <span class="text-xs text-zinc-500">Previous</span>
+                <span class="text-sm font-medium">{prev.data.title}</span>
+              </a>
+            ) : (
+              <div />
+            )
+          }
+          {
+            next ? (
+              <a href={`/lessons/${next.slug}`} class="flex flex-col">
+                <span class="text-xs text-zinc-500">Next</span>
+                <span class="text-sm font-medium">{next.data.title}</span>
+              </a>
+            ) : (
+              <div />
+            )
+          }
+        </nav>
+
+        <div class="mt-6">
+          <a href="/" class="text-sm text-zinc-500 hover:text-zinc-900 dark:hover:text-zinc-100">
+            ← All lessons
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</Layout>

@@ -8,7 +8,8 @@ This is a **pnpm workspace monorepo**. All commands should be run from the repo 
 
 ```
 apps/
-  fp-ts-course/        # Course app — content + thin config only
+  fp-ts-course/        # fp-ts course — content + thin config only
+  nextjs-course/       # Next.js course — content + thin config only
 packages/
   course-ui/           # Shared framework (@courses/ui) — all components and lib
 ```
@@ -18,6 +19,7 @@ packages/
 ```bash
 # Development (run from repo root)
 pnpm dev:fp-ts         # Dev server for fp-ts-course at localhost:3000
+pnpm dev:nextjs        # Dev server for nextjs-course at localhost:3001
 pnpm dev:all           # All course dev servers in parallel
 
 # Build
@@ -98,6 +100,7 @@ Every dynamic route (`/lessons/[slug]`) must export `generateStaticParams()`. Ve
 All courses deploy to one GitHub Pages site under subdirectory paths:
 ```
 username.github.io/<repo>/fp-ts-course
+username.github.io/<repo>/nextjs-course
 ```
 See `.github/workflows/deploy.yml`. Each app sets `basePath` via `CI=true` env var.
 
@@ -114,3 +117,10 @@ See `.github/workflows/deploy.yml`. Each app sets `basePath` via `CI=true` env v
 3. Add `@source` to `globals.css` pointing to `packages/course-ui/src`
 4. Add build step + cp line in `.github/workflows/deploy.yml`
 5. Add `"dev:new-course": "pnpm --filter new-course dev"` to root `package.json`
+
+### Existing courses
+
+| App | Port | Topic | Days |
+|-----|------|-------|------|
+| `fp-ts-course` | 3000 | Functional TypeScript with fp-ts | 16 (day-00 → day-15) |
+| `nextjs-course` | 3001 | Next.js from zero (React included) | 16 (day-00 → day-15) |

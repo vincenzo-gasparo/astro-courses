@@ -24,7 +24,7 @@ export function DayCardList({ lessons }: Props) {
         return (
           <a
             key={lesson.day}
-            href={`/lessons/${lesson.slug}`}
+            href={`${import.meta.env.BASE_URL}lessons/${lesson.slug}`}
             data-testid="day-card"
             data-day={lesson.day}
             data-complete={done ? 'true' : 'false'}

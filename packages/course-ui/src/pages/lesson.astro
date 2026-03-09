@@ -1,8 +1,10 @@
 ---
 import { getCollection, render } from 'astro:content'
-import Layout from '../../layouts/Layout.astro'
-import { MarkCompleteButton, TableOfContents, Quiz } from '@courses/ui'
-import courseConfig from '../../../course.config'
+import Layout from '../layouts/Layout.astro'
+import { MarkCompleteButton } from '../components/mark-complete-button'
+import { TableOfContents } from '../components/table-of-contents'
+import { Quiz } from '../components/mdx/quiz'
+import courseConfig from 'virtual:course-config'
 
 export async function getStaticPaths() {
   const lessons = await getCollection('lessons')

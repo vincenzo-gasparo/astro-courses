@@ -1,8 +1,9 @@
 ---
 import { getCollection } from 'astro:content'
 import Layout from '../layouts/Layout.astro'
-import { ProgressBar, DayCardList } from '@courses/ui'
-import courseConfig from '../../course.config'
+import { ProgressBar } from '../components/progress-bar'
+import { DayCardList } from '../components/day-card-list'
+import courseConfig from 'virtual:course-config'
 
 const allLessons = await getCollection('lessons')
 const sorted = allLessons

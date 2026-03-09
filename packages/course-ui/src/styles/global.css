@@ -2,9 +2,7 @@
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/jetbrains-mono";
 @plugin "@tailwindcss/typography";
-
-/* Scan shared components package for Tailwind class names */
-@source "../../../../packages/course-ui/src";
+@source "..";
 
 @custom-variant dark (&:where(.dark, .dark *));
 

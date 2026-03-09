@@ -1,10 +1,13 @@
 .planning/
-# Next.js
+# Next.js (legacy)
 .next/
 out/
-node_modules/
-# Velite generated output
+# Velite generated output (legacy)
 .velite/
+# Astro
+.astro/
+dist/
+node_modules/
 # Env files
 .env*
 !.env.example

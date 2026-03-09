@@ -3,6 +3,8 @@ import react from '@astrojs/react'
 import mdx from '@astrojs/mdx'
 import tailwindcss from '@tailwindcss/vite'
 import expressiveCode from 'astro-expressive-code'
+import { courseIntegration } from '@courses/ui'
+import courseConfig from './course.config'
 
 const base = process.env.CI ? '/fp-ts-course' : ''
 
@@ -10,6 +12,7 @@ export default defineConfig({
   output: 'static',
   base,
   integrations: [
+    courseIntegration(courseConfig),
     expressiveCode({
       themes: ['one-dark-pro'],
     }),

@@ -1,3 +1,6 @@
+export { courseIntegration } from './integration'
+export type { CourseConfig } from './integration'
+
 // Progress
 export { ProgressInit } from './components/progress-provider'
 

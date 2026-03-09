@@ -1,0 +1,82 @@
+---
+import '../styles/global.css'
+
+const isCI = import.meta.env.CI
+
+const courses = [
+  {
+    title: 'fp-ts Course',
+    description: '15 structured days to confident functional TypeScript.',
+    href: isCI ? './fp-ts-course/' : 'http://localhost:3000',
+  },
+  {
+    title: 'Next.js Course',
+    description: '16 structured days from zero to a deployed Next.js app.',
+    href: isCI ? './nextjs-course/' : 'http://localhost:3001',
+  },
+]
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Courses</title>
+    <meta name="description" content="Structured learning paths for modern TypeScript and web development." />
+    <script is:inline>
+      ;(function () {
+        const theme = localStorage.getItem('theme')
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+        if (theme === 'dark' || (!theme && prefersDark)) {
+          document.documentElement.classList.add('dark')
+        }
+      })()
+    </script>
+  </head>
+  <body class="antialiased min-h-screen bg-zinc-50 dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100">
+    <header class="sticky top-0 z-10 flex items-center justify-end px-6 py-4 border-b bg-white dark:bg-zinc-900">
+      <button
+        id="theme-toggle"
+        aria-label="Toggle dark mode"
+        class="rounded-md border px-3 py-1.5 text-sm border-zinc-200 dark:border-zinc-700"
+      >
+        Dark
+      </button>
+    </header>
+    <script is:inline>
+      ;(function () {
+        const btn = document.getElementById('theme-toggle')
+        const update = () => {
+          btn.textContent = document.documentElement.classList.contains('dark') ? 'Light' : 'Dark'
+        }
+        update()
+        btn.addEventListener('click', function () {
+          const next = !document.documentElement.classList.contains('dark')
+          document.documentElement.classList.toggle('dark', next)
+          localStorage.setItem('theme', next ? 'dark' : 'light')
+          update()
+        })
+      })()
+    </script>
+    <main class="mx-auto max-w-2xl px-4 py-20">
+      <h1 class="text-4xl font-bold mb-3">Courses</h1>
+      <p class="text-zinc-500 dark:text-zinc-400 mb-12">
+        Structured learning paths for modern TypeScript and web development.
+      </p>
+      <div class="grid gap-4">
+        {
+          courses.map((course) => (
+            <a
+              href={course.href}
+              class="block rounded-xl border border-zinc-200 dark:border-zinc-700 bg-white dark:bg-zinc-800 p-6 hover:shadow-md transition-shadow"
+            >
+              <h2 class="text-xl font-semibold mb-2">{course.title}</h2>
+              <p class="text-zinc-500 dark:text-zinc-400">{course.description}</p>
+            </a>
+          ))
+        }
+      </div>
+    </main>
+  </body>
+</html>

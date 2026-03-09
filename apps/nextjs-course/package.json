@@ -1,0 +1,29 @@
+{
+  "name": "nextjs-course",
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "astro dev --port 3001",
+    "build": "astro build",
+    "preview": "astro preview --port 3001",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@astrojs/mdx": "^4.0.0",
+    "@astrojs/react": "^4.0.0",
+    "@courses/ui": "workspace:*",
+    "@tailwindcss/vite": "^4.0.0",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "astro": "^5.0.0",
+    "astro-expressive-code": "^0.40.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "tailwindcss": "^4.0.0",
+    "typescript": "^5"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.58.2",
+    "eslint": "^9"
+  }
+}

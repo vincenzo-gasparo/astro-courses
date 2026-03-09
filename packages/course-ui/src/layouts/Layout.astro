@@ -1,0 +1,42 @@
+---
+import { ThemeToggle, ProgressInit } from '../index'
+import '../styles/global.css'
+
+interface Props {
+  title: string
+  description?: string
+  courseTitle: string
+  storageKey: string
+}
+
+const { title, description, courseTitle, storageKey } = Astro.props
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{title}</title>
+    {description && <meta name="description" content={description} />}
+    <script is:inline>
+      ;(function () {
+        const theme = localStorage.getItem('theme')
+        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+        if (theme === 'dark' || (!theme && prefersDark)) {
+          document.documentElement.classList.add('dark')
+        }
+      })()
+    </script>
+  </head>
+  <body class="antialiased">
+    <header
+      class="sticky top-0 z-10 flex items-center justify-between px-6 py-4 border-b bg-white dark:bg-zinc-900"
+    >
+      <a href={import.meta.env.BASE_URL} class="font-semibold text-lg">{courseTitle}</a>
+      <ThemeToggle client:load />
+    </header>
+    <ProgressInit storageKey={storageKey} client:load />
+    <slot />
+  </body>
+</html>
